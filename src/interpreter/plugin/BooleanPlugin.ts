@@ -8,7 +8,7 @@ import {ErrorMessage} from '../../error-message'
 import {ProcedureAst} from '../../parser'
 import {InterpreterState} from '../InterpreterState'
 import {InternalNoErrorScalarValue, InternalScalarValue, InterpreterValue} from '../InterpreterValue'
-import {FunctionArgumentType, FunctionPlugin, FunctionPluginTypecheck, ImplementedFunctions} from './FunctionPlugin'
+import {FunctionArgument, FunctionArgumentType, FunctionMetadata, FunctionPlugin, FunctionPluginTypecheck, ImplementedFunctions} from './FunctionPlugin'
 
 /**
  * Interpreter plugin containing boolean functions
@@ -135,9 +135,29 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
    * @param state
    */
   public conditionalIf(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('IF'), (condition, arg2, arg3) => {
-      return condition ? arg2 : arg3
-    })
+    const metadata = this.metadata('IF')
+    const validArgNumber = this.validateNumberOfArguments(ast.args.length, metadata)
+    if (validArgNumber !== undefined) {
+      return validArgNumber
+    }
+
+    const condition = this.evaluateAstAsType(ast.args[0], state, metadata.parameters![0]) as boolean | CellError | undefined
+    if (condition === undefined) {
+      return new CellError(ErrorType.VALUE, ErrorMessage.WrongType)
+    }
+    if (condition instanceof CellError) {
+      return condition
+    }
+
+    if (condition) {
+      return this.evaluateAst(ast.args[1], state)
+    }
+
+    if (ast.args[2] !== undefined) {
+      return this.evaluateAst(ast.args[2], state)
+    }
+
+    return metadata.parameters![2].defaultValue as InternalScalarValue
   }
 
   /**
@@ -147,14 +167,26 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
    * @param state
    */
   public ifs(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('IFS'), (...args) => {
-      for (let idx = 0; idx < args.length; idx += 2) {
-        if (args[idx]) {
-          return args[idx+1]
-        }
+    const metadata = this.metadata('IFS')
+    const validArgNumber = this.validateNumberOfArguments(ast.args.length, metadata)
+    if (validArgNumber !== undefined) {
+      return validArgNumber
+    }
+
+    for (let idx = 0; idx < ast.args.length; idx += 2) {
+      const condition = this.evaluateAstAsType(ast.args[idx], state, metadata.parameters![0]) as boolean | CellError | undefined
+      if (condition === undefined) {
+        return new CellError(ErrorType.VALUE, ErrorMessage.WrongType)
       }
-      return new CellError(ErrorType.NA, ErrorMessage.NoConditionMet)
-    })
+      if (condition instanceof CellError) {
+        return condition
+      }
+      if (condition) {
+        return this.evaluateAst(ast.args[idx + 1], state)
+      }
+    }
+
+    return new CellError(ErrorType.NA, ErrorMessage.NoConditionMet)
   }
 
   /**
@@ -166,9 +198,27 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
    * @param state
    */
   public and(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('AND'),
-      (...args: (boolean | undefined)[]) => args.filter(arg => arg !== undefined).every(arg => !!arg)
-    )
+    const metadata = this.metadata('AND')
+    const validArgNumber = this.validateNumberOfArguments(ast.args.length, metadata)
+    if (validArgNumber !== undefined) {
+      return validArgNumber
+    }
+
+    const booleanMeta: FunctionArgument = {argumentType: FunctionArgumentType.BOOLEAN}
+    for (const arg of ast.args) {
+      const scalarValues = this.listOfScalarValues([arg], state)
+      for (const [scalarValue] of scalarValues) {
+        const coerced = this.coerceToType(scalarValue, booleanMeta, state)
+        if (coerced instanceof CellError) {
+          return coerced
+        }
+        if (coerced !== undefined && !coerced) {
+          return false
+        }
+      }
+    }
+
+    return true
   }
 
   /**
@@ -180,9 +230,27 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
    * @param state
    */
   public or(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('OR'),
-      (...args: (boolean | undefined)[]) => args.filter(arg => arg !== undefined).some(arg => arg)
-    )
+    const metadata = this.metadata('OR')
+    const validArgNumber = this.validateNumberOfArguments(ast.args.length, metadata)
+    if (validArgNumber !== undefined) {
+      return validArgNumber
+    }
+
+    const booleanMeta: FunctionArgument = {argumentType: FunctionArgumentType.BOOLEAN}
+    for (const arg of ast.args) {
+      const scalarValues = this.listOfScalarValues([arg], state)
+      for (const [scalarValue] of scalarValues) {
+        const coerced = this.coerceToType(scalarValue, booleanMeta, state)
+        if (coerced instanceof CellError) {
+          return coerced
+        }
+        if (coerced !== undefined && coerced) {
+          return true
+        }
+      }
+    }
+
+    return false
   }
 
   public not(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
@@ -202,51 +270,105 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
   }
 
   public switch(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('SWITCH'), (selector, ...args) => {
-      const n = args.length
-      let i = 0
-      for (; i + 1 < n; i += 2) {
-        if (args[i] instanceof CellError) {
-          continue
-        }
-        if (this.arithmeticHelper.eq(selector, args[i] as InternalNoErrorScalarValue)) {
-          return args[i + 1]
-        }
+    const metadata = this.metadata('SWITCH')
+    const validArgNumber = this.validateNumberOfArguments(ast.args.length, metadata)
+    if (validArgNumber !== undefined) {
+      return validArgNumber
+    }
+
+    const selector = this.evaluateAstAsType(ast.args[0], state, metadata.parameters![0]) as InternalScalarValue | CellError | undefined
+    if (selector instanceof CellError) {
+      return selector
+    }
+    if (selector === undefined) {
+      return new CellError(ErrorType.VALUE, ErrorMessage.CellRefExpected)
+    }
+
+    let idx = 1
+    while (idx + 1 < ast.args.length) {
+      const caseValue = this.evaluateAstAsType(ast.args[idx], state, metadata.parameters![1]) as InternalScalarValue | CellError | undefined
+      if (!(caseValue instanceof CellError) && caseValue !== undefined && this.arithmeticHelper.eq(selector, caseValue as InternalNoErrorScalarValue)) {
+        return this.evaluateAst(ast.args[idx + 1], state)
       }
-      if (i < n) {
-        return args[i]
-      } else {
-        return new CellError(ErrorType.NA, ErrorMessage.NoDefault)
-      }
-    })
+      idx += 2
+    }
+
+    if (idx < ast.args.length) {
+      return this.evaluateAst(ast.args[idx], state)
+    }
+
+    return new CellError(ErrorType.NA, ErrorMessage.NoDefault)
   }
 
   public iferror(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('IFERROR'), (arg1: InternalScalarValue, arg2: InternalScalarValue) => {
-      if (arg1 instanceof CellError) {
-        return arg2
-      } else {
-        return arg1
-      }
-    })
+    const metadata = this.metadata('IFERROR')
+    const validArgNumber = this.validateNumberOfArguments(ast.args.length, metadata)
+    if (validArgNumber !== undefined) {
+      return validArgNumber
+    }
+
+    const arg1 = this.evaluateAst(ast.args[0], state)
+    if (arg1 instanceof CellError) {
+      return this.evaluateAst(ast.args[1], state)
+    }
+    return arg1
   }
 
   public ifna(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('IFNA'), (arg1: InternalScalarValue, arg2: InternalScalarValue) => {
-      if (arg1 instanceof CellError && arg1.type === ErrorType.NA) {
-        return arg2
-      } else {
-        return arg1
-      }
-    })
+    const metadata = this.metadata('IFNA')
+    const validArgNumber = this.validateNumberOfArguments(ast.args.length, metadata)
+    if (validArgNumber !== undefined) {
+      return validArgNumber
+    }
+
+    const arg1 = this.evaluateAst(ast.args[0], state)
+    if (arg1 instanceof CellError && arg1.type === ErrorType.NA) {
+      return this.evaluateAst(ast.args[1], state)
+    }
+    return arg1
   }
 
   public choose(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('CHOOSE'), (selector, ...args) => {
-      if (selector > args.length) {
-        return new CellError(ErrorType.NUM, ErrorMessage.Selector)
-      }
-      return args[selector - 1]
-    })
+    const metadata = this.metadata('CHOOSE')
+    const validArgNumber = this.validateNumberOfArguments(ast.args.length, metadata)
+    if (validArgNumber !== undefined) {
+      return validArgNumber
+    }
+
+    const selector = this.evaluateAstAsType(ast.args[0], state, metadata.parameters![0]) as number | CellError | undefined
+    if (selector === undefined) {
+      return new CellError(ErrorType.NUM, ErrorMessage.Selector)
+    }
+    if (selector instanceof CellError) {
+      return selector
+    }
+
+    const selectedArgIndex = selector
+    const numberOfChoices = ast.args.length - 1
+    if (selectedArgIndex > numberOfChoices) {
+      return new CellError(ErrorType.NUM, ErrorMessage.Selector)
+    }
+
+    return this.evaluateAst(ast.args[selectedArgIndex], state)
+  }
+
+  private validateNumberOfArguments(numberOfArgumentsPassed: number, metadata: FunctionMetadata): CellError | undefined {
+    const argumentsMetadata = this.buildMetadataForEachArgumentValue(numberOfArgumentsPassed, metadata)
+    if (!this.isNumberOfArgumentValuesValid(argumentsMetadata, numberOfArgumentsPassed)) {
+      return new CellError(ErrorType.NA, ErrorMessage.WrongArgNumber)
+    }
+    return undefined
+  }
+
+  private evaluateAstAsType(ast: ProcedureAst['args'][number], state: InterpreterState, argumentType: FunctionArgument): InterpreterValue | boolean | number | string | undefined {
+    const value = this.evaluateAst(ast, state)
+    const coercedValue = this.coerceToType(value, argumentType, state)
+    if (coercedValue === undefined) {
+      return undefined
+    }
+    if (coercedValue instanceof CellError) {
+      return coercedValue
+    }
+    return coercedValue as InterpreterValue | boolean | number | string
   }
 }
