@@ -6,6 +6,8 @@
 export interface TopSortResult<T> {
   sorted: T[],
   cycled: T[],
+  sccs: T[][],
+  cyclicSccs: T[][],
 }
 
 // node status life cycle: undefined -> ON_STACK -> PROCESSED -> POPPED
@@ -26,6 +28,7 @@ export class TopSort<T> {
   private nodeStatus: NodeVisitStatus[] = []
   private order: number[] = []
   private sccNonSingletons: boolean[] = []
+  private sccs: number[][] = []
   private timeCounter: number = 0
 
   constructor(
@@ -146,6 +149,7 @@ export class TopSort<T> {
           this.sccNonSingletons[t] = true
         })
       }
+      this.sccs.push(currentSCC)
     }
 
     DFSstack.pop()
@@ -164,7 +168,24 @@ export class TopSort<T> {
 
     const sorted: T[] = []
     const cycled: T[] = []
+    const sccs: T[][] = []
+    const cyclicSccs: T[][] = []
     this.order.reverse()
+
+    this.sccs.forEach((component: number[]) => {
+      const nodes = component
+        .map((id) => this.nodesSparseArray[id])
+        .filter((node) => node !== undefined)
+      if (nodes.length === 0) {
+        return
+      }
+      sccs.push(nodes)
+
+      const isCyclic = component.length > 1 || this.getAdjacentNodeIds(component[0]).includes(component[0])
+      if (isCyclic) {
+        cyclicSccs.push(nodes)
+      }
+    })
 
     this.order.forEach((t: number) => {
       const adjacentNodes = this.getAdjacentNodeIds(t)
@@ -184,6 +205,6 @@ export class TopSort<T> {
       }
     })
 
-    return {sorted, cycled}
+    return {sorted, cycled, sccs, cyclicSccs}
   }
 }
