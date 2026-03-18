@@ -28,4 +28,25 @@ describe('Cycle resolver with active edges', () => {
 
     hf.destroy()
   })
+
+  it('should use cycle resolver path in incremental recalculation (partialRun)', () => {
+    const hf = HyperFormula.buildFromArray([
+      ['=IF(FALSE(), B1, 1)', '=A1+1'],
+    ], {licenseKey: 'gpl-v3'})
+
+    expect(hf.getCellValue(adr('A1'))).toBe(1)
+    expect(hf.getCellValue(adr('B1'))).toBe(2)
+
+    hf.setCellContents(adr('A1'), '=IF(TRUE(), B1, 1)')
+    const a1Cycled = hf.getCellValue(adr('A1')) as any
+    const b1Cycled = hf.getCellValue(adr('B1')) as any
+    expect(a1Cycled.type).toBe(ErrorType.CYCLE)
+    expect(b1Cycled.type).toBe(ErrorType.CYCLE)
+
+    hf.setCellContents(adr('A1'), '=IF(FALSE(), B1, 1)')
+    expect(hf.getCellValue(adr('A1'))).toBe(1)
+    expect(hf.getCellValue(adr('B1'))).toBe(2)
+
+    hf.destroy()
+  })
 })

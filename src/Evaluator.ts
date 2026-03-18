@@ -19,6 +19,7 @@ import {LazilyTransformingAstService} from './LazilyTransformingAstService'
 import {ColumnSearchStrategy} from './Lookup/SearchStrategy'
 import {Ast, RelativeDependency} from './parser'
 import {Statistics, StatType} from './statistics'
+import {TopSortResult} from './DependencyGraph/TopSort'
 
 export class Evaluator {
   private activeEdgeCollector?: ActiveEdgeCollector
@@ -41,11 +42,11 @@ export class Evaluator {
   public run(): void {
     this.activeEdgeCollector = new ActiveEdgeCollector()
     this.stats.start(StatType.TOP_SORT)
-    const {sorted, cycled, cyclicSccs} = this.dependencyGraph.topSortWithScc()
+    const topSortResult = this.dependencyGraph.topSortWithScc()
     this.stats.end(StatType.TOP_SORT)
 
     this.stats.measure(StatType.EVALUATION, () => {
-      this.recomputeFormulas(cycled, sorted, cyclicSccs)
+      this.recomputeFormulas(topSortResult)
     })
     this._activeEdgeSnapshot = this.activeEdgeCollector.snapshot()
     this.activeEdgeCollector = undefined
@@ -56,10 +57,12 @@ export class Evaluator {
     const changes = ContentChanges.empty()
 
     this.stats.measure(StatType.EVALUATION, () => {
-      this.dependencyGraph.graph.getTopSortedWithSccSubgraphFrom(vertices,
-        (vertex: Vertex) => this.recomputeVertex(vertex, changes),
-        (vertex: Vertex) => this.processVertexOnCycle(vertex, changes),
+      const topSortResult = this.dependencyGraph.graph.getTopSortedWithSccSubgraphFrom(
+        vertices,
+        () => true,
+        () => {},
       )
+      this.recomputeFormulas(topSortResult, changes)
     })
     this._activeEdgeSnapshot = this.activeEdgeCollector.snapshot()
     this.activeEdgeCollector = undefined
@@ -127,9 +130,12 @@ export class Evaluator {
   /**
    * Recalculates formulas in the topological sort order
    */
-  private recomputeFormulas(cycled: Vertex[], sorted: Vertex[], cyclicSccs: Vertex[][]): void {
+  private recomputeFormulas(topSortResult: TopSortResult<Vertex>, changes?: ContentChanges): void {
+    const {sorted, cycled, cyclicSccs} = topSortResult
     sorted.forEach((vertex: Vertex) => {
-      if (vertex instanceof FormulaVertex) {
+      if (changes !== undefined) {
+        this.recomputeVertex(vertex, changes)
+      } else if (vertex instanceof FormulaVertex) {
         const newCellValue = this.recomputeFormulaVertexValue(vertex)
         const address = vertex.getAddress(this.lazilyTransformingAstService)
         this.columnSearch.add(getRawValue(newCellValue), address)
@@ -138,10 +144,10 @@ export class Evaluator {
       }
     })
 
-    this.resolveCyclicSccs(cycled, cyclicSccs)
+    this.resolveCyclicSccs(cycled, cyclicSccs, changes)
   }
 
-  private resolveCyclicSccs(cycled: Vertex[], cyclicSccs: Vertex[][]): void {
+  private resolveCyclicSccs(cycled: Vertex[], cyclicSccs: Vertex[][], changes?: ContentChanges): void {
     const remainingCycledFormulas = new Set<FormulaVertex>(cycled.filter((vertex): vertex is FormulaVertex => vertex instanceof FormulaVertex))
     const processedFormulaIds = new Set<number>()
 
@@ -164,21 +170,23 @@ export class Evaluator {
 
       // Probe dependencies for guard-like formulas with current values.
       sccFormulaVertices.forEach((vertex) => {
-        if (!vertex.isComputed()) {
-          try {
-            this.recomputeFormulaVertexValue(vertex)
-          } catch (e) {
-            // The probe is best-effort. If dependency values are unavailable, keep conservative cycle handling.
-          }
+        try {
+          this.recomputeFormulaVertexValue(vertex)
+        } catch (e) {
+          // The probe is best-effort. If dependency values are unavailable, keep conservative cycle handling.
         }
       })
 
       const [acyclicOrder, unresolved] = this.resolveOrderFromActiveEdges(sccFormulaVertices)
 
       acyclicOrder.forEach((vertex) => {
-        const newCellValue = this.recomputeFormulaVertexValue(vertex)
-        const address = vertex.getAddress(this.lazilyTransformingAstService)
-        this.columnSearch.add(getRawValue(newCellValue), address)
+        if (changes !== undefined) {
+          this.recomputeVertex(vertex, changes)
+        } else {
+          const newCellValue = this.recomputeFormulaVertexValue(vertex)
+          const address = vertex.getAddress(this.lazilyTransformingAstService)
+          this.columnSearch.add(getRawValue(newCellValue), address)
+        }
         remainingCycledFormulas.delete(vertex)
         if (vertex.idInGraph !== undefined) {
           processedFormulaIds.add(vertex.idInGraph)
@@ -203,7 +211,11 @@ export class Evaluator {
     })
 
     remainingCycledFormulas.forEach((vertex) => {
-      vertex.setCellValue(new CellError(ErrorType.CYCLE, undefined, vertex))
+      if (changes !== undefined) {
+        this.processVertexOnCycle(vertex, changes)
+      } else {
+        vertex.setCellValue(new CellError(ErrorType.CYCLE, undefined, vertex))
+      }
     })
   }
 
