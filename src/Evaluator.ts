@@ -132,19 +132,36 @@ export class Evaluator {
    */
   private recomputeFormulas(topSortResult: TopSortResult<Vertex>, changes?: ContentChanges): void {
     const {sorted, cycled, cyclicSccs} = topSortResult
+    const deferredFromSorted: FormulaVertex[] = []
     sorted.forEach((vertex: Vertex) => {
       if (changes !== undefined) {
         this.recomputeVertex(vertex, changes)
       } else if (vertex instanceof FormulaVertex) {
-        const newCellValue = this.recomputeFormulaVertexValue(vertex)
-        const address = vertex.getAddress(this.lazilyTransformingAstService)
-        this.columnSearch.add(getRawValue(newCellValue), address)
+        try {
+          const newCellValue = this.recomputeFormulaVertexValue(vertex)
+          const address = vertex.getAddress(this.lazilyTransformingAstService)
+          this.columnSearch.add(getRawValue(newCellValue), address)
+        } catch (e) {
+          deferredFromSorted.push(vertex)
+        }
       } else if (vertex instanceof RangeVertex) {
         vertex.clearCache()
       }
     })
 
     this.resolveCyclicSccs(cycled, cyclicSccs, changes)
+
+    if (changes === undefined) {
+      deferredFromSorted.forEach((vertex) => {
+        try {
+          const newCellValue = this.recomputeFormulaVertexValue(vertex)
+          const address = vertex.getAddress(this.lazilyTransformingAstService)
+          this.columnSearch.add(getRawValue(newCellValue), address)
+        } catch (e) {
+          vertex.setCellValue(new CellError(ErrorType.CYCLE, undefined, vertex))
+        }
+      })
+    }
   }
 
   private resolveCyclicSccs(cycled: Vertex[], cyclicSccs: Vertex[][], changes?: ContentChanges): void {
@@ -169,27 +186,48 @@ export class Evaluator {
       })
 
       // Probe dependencies for guard-like formulas with current values.
-      sccFormulaVertices.forEach((vertex) => {
-        try {
-          this.recomputeFormulaVertexValue(vertex)
-        } catch (e) {
-          // The probe is best-effort. If dependency values are unavailable, keep conservative cycle handling.
+      const unresolvedAfterProbe = new Set<FormulaVertex>(sccFormulaVertices)
+      let madeProgress = true
+      while (madeProgress && unresolvedAfterProbe.size > 0) {
+        madeProgress = false
+        for (const vertex of [...unresolvedAfterProbe]) {
+          try {
+            this.recomputeFormulaVertexValue(vertex)
+            unresolvedAfterProbe.delete(vertex)
+            madeProgress = true
+          } catch (e) {
+            // The probe is best-effort. If dependency values are unavailable, retry after other vertices are processed.
+          }
+        }
+      }
+
+      const probeFailedFormulaIds = new Set<number>()
+      unresolvedAfterProbe.forEach((vertex) => {
+        if (vertex.idInGraph !== undefined) {
+          probeFailedFormulaIds.add(vertex.idInGraph)
         }
       })
 
-      const [acyclicOrder, unresolved] = this.resolveOrderFromActiveEdges(sccFormulaVertices)
+      const [acyclicOrder, unresolved] = this.resolveOrderFromActiveEdges(sccFormulaVertices, probeFailedFormulaIds)
 
       acyclicOrder.forEach((vertex) => {
-        if (changes !== undefined) {
-          this.recomputeVertex(vertex, changes)
-        } else {
-          const newCellValue = this.recomputeFormulaVertexValue(vertex)
-          const address = vertex.getAddress(this.lazilyTransformingAstService)
-          this.columnSearch.add(getRawValue(newCellValue), address)
-        }
-        remainingCycledFormulas.delete(vertex)
-        if (vertex.idInGraph !== undefined) {
-          processedFormulaIds.add(vertex.idInGraph)
+        try {
+          if (changes !== undefined) {
+            this.recomputeVertex(vertex, changes)
+          } else {
+            const newCellValue = this.recomputeFormulaVertexValue(vertex)
+            const address = vertex.getAddress(this.lazilyTransformingAstService)
+            this.columnSearch.add(getRawValue(newCellValue), address)
+          }
+          remainingCycledFormulas.delete(vertex)
+          if (vertex.idInGraph !== undefined) {
+            processedFormulaIds.add(vertex.idInGraph)
+          }
+        } catch (e) {
+          remainingCycledFormulas.add(vertex)
+          if (vertex.idInGraph !== undefined) {
+            processedFormulaIds.add(vertex.idInGraph)
+          }
         }
       })
 
@@ -219,7 +257,7 @@ export class Evaluator {
     })
   }
 
-  private resolveOrderFromActiveEdges(sccFormulaVertices: FormulaVertex[]): [FormulaVertex[], FormulaVertex[]] {
+  private resolveOrderFromActiveEdges(sccFormulaVertices: FormulaVertex[], forceUnresolved: Set<number> = new Set<number>()): [FormulaVertex[], FormulaVertex[]] {
     const idToVertex = new Map<number, FormulaVertex>()
     sccFormulaVertices.forEach((vertex) => {
       if (vertex.idInGraph !== undefined) {
@@ -256,7 +294,7 @@ export class Evaluator {
 
     const queue: number[] = []
     incoming.forEach((deps, nodeId) => {
-      if (deps.size === 0) {
+      if (deps.size === 0 && !forceUnresolved.has(nodeId)) {
         queue.push(nodeId)
       }
     })
@@ -287,6 +325,9 @@ export class Evaluator {
 
     const unresolved = sccFormulaVertices.filter((vertex) => {
       if (vertex.idInGraph === undefined) {
+        return true
+      }
+      if (forceUnresolved.has(vertex.idInGraph)) {
         return true
       }
       return !ordered.includes(vertex)
