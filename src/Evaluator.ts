@@ -10,6 +10,7 @@ import {Config} from './Config'
 import {ContentChanges} from './ContentChanges'
 import {ArrayFormulaVertex, DependencyGraph, RangeVertex, Vertex} from './DependencyGraph'
 import {FormulaVertex} from './DependencyGraph/FormulaVertex'
+import {ActiveEdgeCollector, ActiveEdgeSnapshot} from './interpreter/ActiveEdgeCollector'
 import {Interpreter} from './interpreter/Interpreter'
 import {InterpreterState} from './interpreter/InterpreterState'
 import {EmptyValue, getRawValue, InterpreterValue} from './interpreter/InterpreterValue'
@@ -20,6 +21,8 @@ import {Ast, RelativeDependency} from './parser'
 import {Statistics, StatType} from './statistics'
 
 export class Evaluator {
+  private activeEdgeCollector?: ActiveEdgeCollector
+  private _activeEdgeSnapshot?: ActiveEdgeSnapshot
 
   constructor(
     private readonly config: Config,
@@ -31,7 +34,12 @@ export class Evaluator {
   ) {
   }
 
+  public get activeEdgeSnapshot(): ActiveEdgeSnapshot | undefined {
+    return this._activeEdgeSnapshot
+  }
+
   public run(): void {
+    this.activeEdgeCollector = new ActiveEdgeCollector()
     this.stats.start(StatType.TOP_SORT)
     const {sorted, cycled} = this.dependencyGraph.topSortWithScc()
     this.stats.end(StatType.TOP_SORT)
@@ -39,9 +47,12 @@ export class Evaluator {
     this.stats.measure(StatType.EVALUATION, () => {
       this.recomputeFormulas(cycled, sorted)
     })
+    this._activeEdgeSnapshot = this.activeEdgeCollector.snapshot()
+    this.activeEdgeCollector = undefined
   }
 
   public partialRun(vertices: Vertex[]): ContentChanges {
+    this.activeEdgeCollector = new ActiveEdgeCollector()
     const changes = ContentChanges.empty()
 
     this.stats.measure(StatType.EVALUATION, () => {
@@ -50,6 +61,8 @@ export class Evaluator {
         (vertex: Vertex) => this.processVertexOnCycle(vertex, changes),
       )
     })
+    this._activeEdgeSnapshot = this.activeEdgeCollector.snapshot()
+    this.activeEdgeCollector = undefined
     return changes
   }
 
@@ -137,7 +150,7 @@ export class Evaluator {
       return vertex.setNoSpace()
     } else {
       const formula = vertex.getFormula(this.lazilyTransformingAstService)
-      const newCellValue = this.evaluateAstToCellValue(formula, new InterpreterState(address, this.config.useArrayArithmetic, vertex))
+      const newCellValue = this.evaluateAstToCellValue(formula, new InterpreterState(address, this.config.useArrayArithmetic, vertex, this.activeEdgeCollector))
       return vertex.setCellValue(newCellValue)
     }
   }
