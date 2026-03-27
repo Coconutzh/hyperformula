@@ -7,6 +7,7 @@ import argparse
 import itertools
 import json
 import random
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -169,6 +170,70 @@ def merge_inputs(
   return [merged[k] for k in sorted(merged.keys())]
 
 
+def sample_inputs_diverse(
+  inputs: Sequence[InputVar],
+  max_inputs: int,
+  seed: int,
+) -> List[InputVar]:
+  if max_inputs <= 0 or len(inputs) <= max_inputs:
+    return list(inputs)
+
+  rng = random.Random(seed)
+  by_sheet: Dict[str, List[InputVar]] = defaultdict(list)
+  by_type: Dict[str, List[InputVar]] = defaultdict(list)
+  for var in inputs:
+    by_sheet[var.sheet].append(var)
+    by_type[var.input_type].append(var)
+
+  for arr in by_sheet.values():
+    rng.shuffle(arr)
+  for arr in by_type.values():
+    rng.shuffle(arr)
+
+  selected: List[InputVar] = []
+  selected_keys: Set[str] = set()
+
+  def try_add(var: InputVar) -> bool:
+    if var.key in selected_keys:
+      return False
+    if len(selected) >= max_inputs:
+      return False
+    selected.append(var)
+    selected_keys.add(var.key)
+    return True
+
+  # 1) ensure every selected sheet has at least one sample
+  for sheet in sorted(by_sheet.keys()):
+    if len(selected) >= max_inputs:
+      break
+    try_add(by_sheet[sheet][0])
+
+  # 2) ensure input type diversity (input/dropdown/checkbox_link)
+  for input_type in sorted(by_type.keys()):
+    if len(selected) >= max_inputs:
+      break
+    for var in by_type[input_type]:
+      if try_add(var):
+        break
+
+  # 3) fill the rest with weighted random: larger sheets can contribute more
+  pool: List[InputVar] = [v for v in inputs if v.key not in selected_keys]
+  sheet_selected_count: Dict[str, int] = Counter(v.sheet for v in selected)
+  while len(selected) < max_inputs and pool:
+    weights: List[float] = []
+    for v in pool:
+      # Prefer broader coverage while allowing larger sheets to contribute more.
+      sheet_size = len(by_sheet[v.sheet])
+      penalty = 1.0 + float(sheet_selected_count.get(v.sheet, 0))
+      weights.append(sheet_size / penalty)
+    picked = rng.choices(pool, weights=weights, k=1)[0]
+    try_add(picked)
+    sheet_selected_count[picked.sheet] = sheet_selected_count.get(picked.sheet, 0) + 1
+    pool = [v for v in pool if v.key not in selected_keys]
+
+  return selected
+
+
 def build_baseline_case(case_id: int) -> Dict[str, Any]:
   return {
     "id": case_id,
@@ -300,6 +365,7 @@ def main() -> None:
   parser.add_argument("--seed", type=int, default=42)
   parser.add_argument("--pairwise-trials", type=int, default=50)
   parser.add_argument("--sheet", action="append", default=[], help="Optional sheet filter (repeatable).")
+  parser.add_argument("--sheet-file", default="", help="UTF-8 text file with one sheet name per line.")
   args = parser.parse_args()
 
   inputs_path = Path(args.inputs).resolve()
@@ -312,8 +378,17 @@ def main() -> None:
   checks = load_checkbox_links(checks_path)
 
   merged = merge_inputs(base_inputs, dropdowns, checks)
-  if args.sheet:
-    sheet_set = set(args.sheet)
+  sheet_list = list(args.sheet)
+  if args.sheet_file:
+    sheet_file = Path(args.sheet_file).resolve()
+    if not sheet_file.exists():
+      raise SystemExit(f"Sheet file not found: {sheet_file}")
+    for line in sheet_file.read_text(encoding="utf-8-sig").splitlines():
+      name = line.strip()
+      if name:
+        sheet_list.append(name)
+  if sheet_list:
+    sheet_set = set(sheet_list)
     merged = [v for v in merged if v.sheet in sheet_set]
 
   for var in merged:
@@ -322,7 +397,7 @@ def main() -> None:
       var.candidates = dedup_keep_order([var.baseline] + var.candidates)
 
   if args.max_inputs > 0:
-    merged = merged[:args.max_inputs]
+    merged = sample_inputs_diverse(merged, args.max_inputs, args.seed)
 
   if args.mode == "smoke":
     cases = build_smoke_cases(merged, 0)
