@@ -86,4 +86,26 @@ describe('HyperFormula', () => {
 
     hf.destroy()
   })
+
+  it('should allow VLOOKUP over IF array-constructed 2-column table', () => {
+    const data = Array.from({length: 112}, () => Array(64).fill(null))
+
+    // Row 109-112 (1-based), columns AV/BD/BF/BL.
+    data[108][55] = 'K1'
+    data[109][55] = 'K2'
+    data[110][55] = 'K3'
+    data[111][55] = 'K4'
+
+    data[108][47] = 100
+    data[109][47] = 200
+    data[110][47] = 300
+    data[111][47] = 400
+
+    data[108][57] = 'K2'
+    data[108][63] = '=VLOOKUP(BF109,IF({1,0},BD109:BD112,AV109:AV112),2,0)'
+
+    const hf = HyperFormula.buildFromArray(data, {licenseKey: 'gpl-v3'})
+    expect(hf.getCellValue({sheet: 0, row: 108, col: 63})).toBe(200)
+    hf.destroy()
+  })
 })

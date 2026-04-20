@@ -6,6 +6,7 @@
 import {CellError, ErrorType} from '../../Cell'
 import {ErrorMessage} from '../../error-message'
 import {ProcedureAst} from '../../parser'
+import {SimpleRangeValue} from '../../SimpleRangeValue'
 import {InterpreterState} from '../InterpreterState'
 import {InternalNoErrorScalarValue, InternalScalarValue, InterpreterValue} from '../InterpreterValue'
 import {FunctionArgument, FunctionArgumentType, FunctionMetadata, FunctionPlugin, FunctionPluginTypecheck, ImplementedFunctions} from './FunctionPlugin'
@@ -141,7 +142,15 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
       return validArgNumber
     }
 
-    const condition = this.evaluateAstAsType(ast.args[0], state, metadata.parameters![0]) as boolean | CellError | undefined
+    const conditionValue = this.evaluateAst(ast.args[0], state)
+    if (conditionValue instanceof SimpleRangeValue && conditionValue.isAdHoc() && conditionValue.numberOfElements() > 1) {
+      const vectorizedState = new InterpreterState(state.formulaAddress, true, state.formulaVertex, state.activeEdgeCollector)
+      return this.runFunction(ast.args, vectorizedState, metadata, (conditionArg: boolean, valueIfTrue: InternalScalarValue, valueIfFalse: InternalScalarValue) =>
+        conditionArg ? valueIfTrue : valueIfFalse
+      )
+    }
+
+    const condition = this.coerceToType(conditionValue, metadata.parameters![0], state) as boolean | CellError | undefined
     if (condition === undefined) {
       return new CellError(ErrorType.VALUE, ErrorMessage.WrongType)
     }
