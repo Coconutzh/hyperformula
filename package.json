@@ -63,6 +63,7 @@
     "bundle-all": "cross-env HF_COMPILE=1 npm-run-all clean compile bundle:** verify-bundles",
     "bundle:es": "(node script/if-ne-env.js HF_COMPILE=1 || npm run compile) && cross-env-shell BABEL_ENV=es env-cmd -f ht.config.js babel lib --out-file-extension .mjs --out-dir es",
     "bundle:cjs": "(node script/if-ne-env.js HF_COMPILE=1 || npm run compile) && cross-env-shell BABEL_ENV=commonjs env-cmd -f ht.config.js babel lib --out-dir commonjs",
+    "prepare": "npm run bundle:cjs",
     "bundle:development": "(node script/if-ne-env.js HF_COMPILE=1 || npm run compile) && cross-env-shell BABEL_ENV=dist NODE_ENV=development env-cmd -f ht.config.js webpack ./lib/index.js",
     "bundle:production": "(node script/if-ne-env.js HF_COMPILE=1 || npm run compile) && cross-env-shell BABEL_ENV=dist NODE_ENV=production env-cmd -f ht.config.js webpack ./lib/index.js",
     "bundle:languages": "(node script/if-ne-env.js HF_COMPILE=1 || npm run compile) && cross-env-shell BABEL_ENV=dist NODE_ENV=languages env-cmd -f ht.config.js webpack",
