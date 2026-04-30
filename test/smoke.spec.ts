@@ -108,4 +108,38 @@ describe('HyperFormula', () => {
     expect(hf.getCellValue({sheet: 0, row: 108, col: 63})).toBe(200)
     hf.destroy()
   })
+
+  it('should keep TRUNC stable on decimal carry boundaries', () => {
+    const data = Array.from({length: 19}, () => Array(2).fill(null))
+
+    data[7][1] = 0
+
+    for (let row = 8; row < 19; row++) {
+      data[row][1] = `=TRUNC(B${row}+0.001,3)`
+    }
+
+    const hf = HyperFormula.buildFromArray(data, {licenseKey: 'gpl-v3'})
+
+    expect(hf.getCellValue(adr('B17'))).toBe(0.009)
+    expect(hf.getCellValue(adr('B18'))).toBe(0.01)
+    expect(hf.getCellValue(adr('B19'))).toBe(0.011)
+
+    hf.destroy()
+  })
+
+  it('should accept bare TRUE/FALSE literals in formulas', () => {
+    const data = [
+      ['a', 42],
+      ['=IF(FALSE,1,2)', '=IF(TRUE,1,2)'],
+      ['a', '=VLOOKUP(A3,A1:B1,2,FALSE)'],
+    ]
+
+    const hf = HyperFormula.buildFromArray(data, {licenseKey: 'gpl-v3'})
+
+    expect(hf.getCellValue(adr('A2'))).toBe(2)
+    expect(hf.getCellValue(adr('B2'))).toBe(1)
+    expect(hf.getCellValue(adr('B3'))).toBe(42)
+
+    hf.destroy()
+  })
 })

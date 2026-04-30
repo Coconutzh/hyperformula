@@ -183,6 +183,12 @@ export class FormulaParser extends EmbeddedActionsParser {
 
   private namedExpressionExpression: AstRule = this.RULE('namedExpressionExpression', () => {
     const name = this.CONSUME(NamedExpression) as ExtendedToken
+    const canonicalName = this.lexerConfig.functionMapping[name.image.toUpperCase()] ?? name.image.toUpperCase()
+
+    if (canonicalName === 'TRUE' || canonicalName === 'FALSE') {
+      return buildProcedureAst(canonicalName, [], name.leadingWhitespace)
+    }
+
     return buildNamedExpressionAst(name.image, name.leadingWhitespace)
   })
 

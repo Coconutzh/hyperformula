@@ -6,6 +6,7 @@
 import {CellError, ErrorType} from '../../Cell'
 import {ErrorMessage} from '../../error-message'
 import {ProcedureAst} from '../../parser'
+import {fixNegativeZero} from '../ArithmeticHelper'
 import {InterpreterState} from '../InterpreterState'
 import {InterpreterValue} from '../InterpreterValue'
 import {FunctionArgumentType, FunctionPlugin, FunctionPluginTypecheck, ImplementedFunctions} from './FunctionPlugin'
@@ -18,6 +19,17 @@ export function findNextOddNumber(arg: number): number {
 export function findNextEvenNumber(arg: number): number {
   const ceiled = Math.ceil(arg)
   return (ceiled % 2 === 0) ? ceiled : ceiled + 1
+}
+
+function snapToNearestIntegerIfClose(value: number, epsilon: number): number {
+  const nearestInteger = Math.round(value)
+  const tolerance = Math.max(1, Math.abs(value)) * epsilon
+
+  if (Math.abs(value - nearestInteger) <= tolerance) {
+    return nearestInteger
+  }
+
+  return value
 }
 
 export class RoundingPlugin extends FunctionPlugin implements FunctionPluginTypecheck<RoundingPlugin> {
@@ -126,10 +138,12 @@ export class RoundingPlugin extends FunctionPlugin implements FunctionPluginType
   public rounddown(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
     return this.runFunction(ast.args, state, this.metadata('ROUNDDOWN'), (numberToRound: number, places: number): number => {
       const placesMultiplier = Math.pow(10, places)
+      const scaledValue = snapToNearestIntegerIfClose(numberToRound * placesMultiplier, this.config.precisionEpsilon)
+
       if (numberToRound < 0) {
-        return -Math.floor(-numberToRound * placesMultiplier) / placesMultiplier
+        return fixNegativeZero(-Math.floor(-scaledValue) / placesMultiplier)
       } else {
-        return Math.floor(numberToRound * placesMultiplier) / placesMultiplier
+        return fixNegativeZero(Math.floor(scaledValue) / placesMultiplier)
       }
     })
   }
