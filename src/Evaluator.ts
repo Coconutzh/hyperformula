@@ -12,7 +12,7 @@ import {ArrayFormulaVertex, DependencyGraph, RangeVertex, Vertex} from './Depend
 import {FormulaVertex} from './DependencyGraph/FormulaVertex'
 import {ActiveDependency, ActiveEdgeCollector, ActiveEdgeSnapshot} from './interpreter/ActiveEdgeCollector'
 import {Interpreter} from './interpreter/Interpreter'
-import {InterpreterState} from './interpreter/InterpreterState'
+import {InterpreterState, ProbeAccess, ProbeAccessTracker, ProbeValueResolver} from './interpreter/InterpreterState'
 import {EmptyValue, getRawValue, InterpreterValue} from './interpreter/InterpreterValue'
 import {SimpleRangeValue} from './SimpleRangeValue'
 import {LazilyTransformingAstService} from './LazilyTransformingAstService'
@@ -29,6 +29,15 @@ export interface CycleResolutionDebugDependency {
   coveredByPreciseRange?: boolean,
 }
 
+export interface CycleResolutionDebugProbeFailure {
+  errorType: string,
+  errorMessage: string,
+  lastAccessKind: ProbeAccess['kind'] | null,
+  lastAccessAddress?: string,
+  lastAccessRange?: string,
+  expressionName?: string,
+}
+
 export interface CycleResolutionDebugFormula {
   formulaId: number | null,
   sheet: string,
@@ -36,6 +45,7 @@ export interface CycleResolutionDebugFormula {
   formula: string,
   status: 'ordered' | 'unresolved',
   probeFailed: boolean,
+  probeFailure?: CycleResolutionDebugProbeFailure,
   dependencyCounts: {
     cell: number,
     range: number,
@@ -247,15 +257,21 @@ export class Evaluator {
 
       // Probe dependencies for guard-like formulas with current values.
       const unresolvedAfterProbe = new Set<FormulaVertex>(sccFormulaVertices)
+      const probeFailures = new Map<number, CycleResolutionDebugProbeFailure>()
       let madeProgress = true
       while (madeProgress && unresolvedAfterProbe.size > 0) {
         madeProgress = false
         for (const vertex of [...unresolvedAfterProbe]) {
+          const probeAccessTracker = new ProbeAccessTracker()
+          const probeValueResolver = this.createProbeValueResolver(probeAccessTracker)
           try {
-            this.recomputeFormulaVertexValue(vertex)
+            this.recomputeFormulaVertexValue(vertex, probeAccessTracker, probeValueResolver)
             unresolvedAfterProbe.delete(vertex)
             madeProgress = true
           } catch (e) {
+            if (vertex.idInGraph !== undefined) {
+              probeFailures.set(vertex.idInGraph, this.buildProbeFailureDebug(e, probeAccessTracker.snapshot()))
+            }
             // The probe is best-effort. If dependency values are unavailable, retry after other vertices are processed.
           }
         }
@@ -306,6 +322,7 @@ export class Evaluator {
           sccFormulaVertices,
           finalUnresolved,
           probeFailedFormulaIds,
+          probeFailures,
         ))
       }
     }
@@ -458,6 +475,7 @@ export class Evaluator {
     sccFormulaVertices: FormulaVertex[],
     finalUnresolved: Set<FormulaVertex>,
     probeFailedFormulaIds: Set<number>,
+    probeFailures: Map<number, CycleResolutionDebugProbeFailure>,
   ): CycleResolutionDebugScc {
     const snapshot = this.activeEdgeCollector?.snapshot()
     const idToVertex = new Map<number, FormulaVertex>()
@@ -473,6 +491,7 @@ export class Evaluator {
       probeFailedFormulaIds,
       idToVertex,
       snapshot,
+      probeFailures,
     ))
 
     return {
@@ -501,6 +520,7 @@ export class Evaluator {
     probeFailedFormulaIds: Set<number>,
     idToVertex: Map<number, FormulaVertex>,
     snapshot: ActiveEdgeSnapshot | undefined,
+    probeFailures: Map<number, CycleResolutionDebugProbeFailure>,
   ): CycleResolutionDebugFormula {
     const address = vertex.getAddress(this.lazilyTransformingAstService)
     const formulaId = vertex.idInGraph ?? null
@@ -517,6 +537,7 @@ export class Evaluator {
       formula: this.unparser.unparse(vertex.getFormula(this.lazilyTransformingAstService), address),
       status: finalUnresolved.has(vertex) ? 'unresolved' : 'ordered',
       probeFailed: formulaId !== null ? probeFailedFormulaIds.has(formulaId) : false,
+      probeFailure: formulaId !== null ? probeFailures.get(formulaId) : undefined,
       dependencyCounts: {
         cell: dependencies.filter((dependency) => dependency.kind === 'CELL').length,
         range: dependencies.filter((dependency) => dependency.kind === 'RANGE').length,
@@ -599,13 +620,76 @@ export class Evaluator {
     }
   }
 
-  private recomputeFormulaVertexValue(vertex: FormulaVertex): InterpreterValue {
+  private buildProbeFailureDebug(error: unknown, lastAccess: ProbeAccess | undefined): CycleResolutionDebugProbeFailure {
+    const errorMessage = error instanceof Error
+      ? error.message
+      : String(error)
+
+    const errorType = error instanceof Error
+      ? (error.name || error.constructor.name || 'Error')
+      : typeof error
+
+    const probeFailure: CycleResolutionDebugProbeFailure = {
+      errorType,
+      errorMessage,
+      lastAccessKind: lastAccess?.kind ?? null,
+    }
+
+    if (lastAccess?.kind === 'CELL') {
+      probeFailure.lastAccessAddress = this.formatAddress(lastAccess.address)
+    } else if (lastAccess?.kind === 'RANGE') {
+      probeFailure.lastAccessRange = this.formatRange(lastAccess.start, lastAccess.end)
+    } else if (lastAccess?.kind === 'RANGE_CELL') {
+      probeFailure.lastAccessAddress = this.formatAddress(lastAccess.address)
+      probeFailure.lastAccessRange = this.formatRange(lastAccess.start, lastAccess.end)
+    } else if (lastAccess?.kind === 'NAMED_EXPRESSION') {
+      probeFailure.expressionName = lastAccess.expressionName
+      probeFailure.lastAccessAddress = this.formatAddress(lastAccess.address)
+    }
+
+    return probeFailure
+  }
+
+  private createProbeValueResolver(probeAccessTracker?: ProbeAccessTracker): ProbeValueResolver {
+    const verticesInProbe = new Set<FormulaVertex>()
+    const resolver: ProbeValueResolver = {
+      getCellValue: (address: SimpleCellAddress): InterpreterValue => {
+        const vertex = this.dependencyGraph.getCell(address)
+        if (vertex === undefined) {
+          return EmptyValue
+        }
+
+        if (vertex instanceof FormulaVertex && !vertex.isComputed()) {
+          if (verticesInProbe.has(vertex)) {
+            throw Error(vertex instanceof ArrayFormulaVertex ? 'Array not computed yet.' : 'Value of the formula cell is not computed.')
+          }
+
+          verticesInProbe.add(vertex)
+          try {
+            this.recomputeFormulaVertexValue(vertex, probeAccessTracker, resolver)
+          } finally {
+            verticesInProbe.delete(vertex)
+          }
+        }
+
+        if (vertex instanceof ArrayFormulaVertex) {
+          return vertex.getArrayCellValue(address)
+        }
+
+        return vertex.getCellValue()
+      },
+    }
+
+    return resolver
+  }
+
+  private recomputeFormulaVertexValue(vertex: FormulaVertex, probeAccessTracker?: ProbeAccessTracker, probeValueResolver?: ProbeValueResolver): InterpreterValue {
     const address = vertex.getAddress(this.lazilyTransformingAstService)
     if (vertex instanceof ArrayFormulaVertex && (vertex.array.size.isRef || !this.dependencyGraph.isThereSpaceForArray(vertex))) {
       return vertex.setNoSpace()
     } else {
       const formula = vertex.getFormula(this.lazilyTransformingAstService)
-      const newCellValue = this.evaluateAstToCellValue(formula, new InterpreterState(address, this.config.useArrayArithmetic, vertex, this.activeEdgeCollector))
+      const newCellValue = this.evaluateAstToCellValue(formula, new InterpreterState(address, this.config.useArrayArithmetic, vertex, this.activeEdgeCollector, probeAccessTracker, probeValueResolver))
       return vertex.setCellValue(newCellValue)
     }
   }

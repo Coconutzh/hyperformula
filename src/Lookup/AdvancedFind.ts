@@ -56,7 +56,12 @@ export abstract class AdvancedFind {
       range,
       { searchCoordinate, orderingDirection: ordering, ifNoMatch },
       this.dependencyGraph,
-      onRangeValueAccess
+      onRangeValueAccess,
+      (address) => {
+        const row = address.row - range.start.row
+        const col = address.col - range.start.col
+        return getRawValue(rangeValue.getValueAt(row, col))
+      }
     )
   }
 
@@ -69,7 +74,9 @@ export abstract class AdvancedFind {
     const values: InternalScalarValue[] = []
     for (const address of range.addresses(this.dependencyGraph)) {
       onRangeValueAccess?.(address)
-      values.push(this.dependencyGraph.getScalarValue(address))
+      const row = address.row - range.start.row
+      const col = address.col - range.start.col
+      values.push(rangeValue.getValueAt(row, col))
     }
     return values
   }

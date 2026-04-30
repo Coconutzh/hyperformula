@@ -633,6 +633,8 @@ export class NumericAggregationPlugin extends FunctionPlugin implements Function
       return new CellError(ErrorType.REF, ErrorMessage.SheetRef)
     }
 
+    state.recordRangeAccess(range.start, range.end)
+
     const rangeVertex = this.dependencyGraph.getRange(range.start, range.end)
 
     if (rangeVertex === undefined) {
@@ -641,7 +643,7 @@ export class NumericAggregationPlugin extends FunctionPlugin implements Function
 
     let value = rangeVertex.getFunctionValue(functionName) as (T | CellError | undefined)
     if (value === undefined) {
-      const rangeValues = this.getRangeValues(functionName, range, rangeVertex, mapFunction, coercionFunction)
+      const rangeValues = this.getRangeValues(functionName, range, rangeVertex, mapFunction, coercionFunction, state)
       value = rangeValues.reduce((arg1, arg2) => {
         if (arg1 instanceof CellError) {
           return arg1
@@ -679,7 +681,7 @@ export class NumericAggregationPlugin extends FunctionPlugin implements Function
    * @param mapFunction
    * @param coercionFunction
    */
-  private getRangeValues<T>(functionName: string, range: AbsoluteCellRange, rangeVertex: RangeVertex, mapFunction: MapOperation<T>, coercionFunction: coercionOperation): (T | CellError)[] {
+  private getRangeValues<T>(functionName: string, range: AbsoluteCellRange, rangeVertex: RangeVertex, mapFunction: MapOperation<T>, coercionFunction: coercionOperation, state: InterpreterState): (T | CellError)[] {
     const rangeResult: (T | CellError)[] = []
     const {smallerRangeVertex, restRange} = this.dependencyGraph.rangeMapping.findSmallerRange(range)
     let actualRange: AbsoluteCellRange
@@ -689,7 +691,8 @@ export class NumericAggregationPlugin extends FunctionPlugin implements Function
         rangeResult.push(cachedValue)
       } else {
         for (const cellFromRange of smallerRangeVertex.range.addresses(this.dependencyGraph)) {
-          const val = coercionFunction(this.dependencyGraph.getScalarValue(cellFromRange))
+          state.recordRangeCellAccess(range.start, range.end, cellFromRange)
+          const val = coercionFunction(state.getScalarValue(this.dependencyGraph, cellFromRange))
           if (val instanceof CellError) {
             rangeResult.push(val)
           } else if (val !== undefined) {
@@ -703,7 +706,8 @@ export class NumericAggregationPlugin extends FunctionPlugin implements Function
     }
 
     for (const cellFromRange of actualRange.addresses(this.dependencyGraph)) {
-      const val = coercionFunction(this.dependencyGraph.getScalarValue(cellFromRange))
+      state.recordRangeCellAccess(range.start, range.end, cellFromRange)
+      const val = coercionFunction(state.getScalarValue(this.dependencyGraph, cellFromRange))
       if (val instanceof CellError) {
         rangeResult.push(val)
       } else if (val !== undefined) {

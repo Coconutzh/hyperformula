@@ -28,6 +28,7 @@ export function findLastOccurrenceInOrderedRange(
   { searchCoordinate, orderingDirection, ifNoMatch }: { searchCoordinate: 'row' | 'col', orderingDirection: 'asc' | 'desc', ifNoMatch: 'returnLowerBound' | 'returnUpperBound' | 'returnNotFound' },
   dependencyGraph: DependencyGraph,
   onRangeValueAccess?: (address: SimpleCellAddress) => void,
+  getValueFromAddress?: (address: SimpleCellAddress) => RawInterpreterValue,
 ): number {
   const start = range.start[searchCoordinate]
   const end = searchCoordinate === 'col' ? range.effectiveEndColumn(dependencyGraph) : range.effectiveEndRow(dependencyGraph)
@@ -39,7 +40,8 @@ export function findLastOccurrenceInOrderedRange(
   const getValueFromIndexFn = (index: number) => {
     const address = getAddressFromIndex(index)
     onRangeValueAccess?.(address)
-    return getRawValue(dependencyGraph.getCellValue(address))
+    const value = getValueFromAddress ? getValueFromAddress(address) : dependencyGraph.getCellValue(address)
+    return getRawValue(value)
   }
 
   const compareFn = orderingDirection === 'asc'

@@ -47,7 +47,7 @@ export class ArraySizePredictor {
   }
 
   public checkArraySize(ast: Ast, formulaAddress: SimpleCellAddress): ArraySize {
-    return this.checkArraySizeForAst(ast, {formulaAddress, arraysFlag: this.config.useArrayArithmetic})
+    return this.checkArraySizeForAst(ast, new InterpreterState(formulaAddress, this.config.useArrayArithmetic))
   }
 
   public checkArraySizeForAst(ast: Ast, state: InterpreterState): ArraySize {

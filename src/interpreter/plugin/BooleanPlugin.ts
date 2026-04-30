@@ -144,7 +144,7 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
 
     const conditionValue = this.evaluateAst(ast.args[0], state)
     if (conditionValue instanceof SimpleRangeValue && conditionValue.isAdHoc() && conditionValue.numberOfElements() > 1) {
-      const vectorizedState = new InterpreterState(state.formulaAddress, true, state.formulaVertex, state.activeEdgeCollector)
+      const vectorizedState = new InterpreterState(state.formulaAddress, true, state.formulaVertex, state.activeEdgeCollector, state.probeAccessTracker, state.probeValueResolver)
       return this.runFunction(ast.args, vectorizedState, metadata, (conditionArg: boolean, valueIfTrue: InternalScalarValue, valueIfFalse: InternalScalarValue) =>
         conditionArg ? valueIfTrue : valueIfFalse
       )

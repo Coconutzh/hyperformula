@@ -98,8 +98,8 @@ export class Interpreter {
           return new CellError(ErrorType.REF, ErrorMessage.SheetRef)
         }
 
-        state.activeEdgeCollector?.recordCellEdge(state.formulaVertex, address)
-        return this.dependencyGraph.getCellValue(address)
+        state.recordCellAccess(address)
+        return state.getCellValue(this.dependencyGraph, address)
       }
       case AstNodeType.NUMBER:
       case AstNodeType.STRING: {
@@ -187,7 +187,9 @@ export class Interpreter {
             state.formulaAddress,
             state.arraysFlag || this.functionRegistry.isArrayFunction(ast.procedureName),
             state.formulaVertex,
-            state.activeEdgeCollector
+            state.activeEdgeCollector,
+            state.probeAccessTracker,
+            state.probeValueResolver,
           ))
         } else {
           return new CellError(ErrorType.NAME, ErrorMessage.FunctionName(ast.procedureName))
@@ -196,8 +198,8 @@ export class Interpreter {
       case AstNodeType.NAMED_EXPRESSION: {
         const namedExpression = this.namedExpressions.nearestNamedExpression(ast.expressionName, state.formulaAddress.sheet)
         if (namedExpression) {
-          state.activeEdgeCollector?.recordNamedExpressionEdge(state.formulaVertex, ast.expressionName, namedExpression.address)
-          return this.dependencyGraph.getCellValue(namedExpression.address)
+          state.recordNamedExpressionAccess(ast.expressionName, namedExpression.address)
+          return state.getCellValue(this.dependencyGraph, namedExpression.address)
         } else {
           return new CellError(ErrorType.NAME, ErrorMessage.NamedExpressionName(ast.expressionName))
         }
@@ -212,7 +214,7 @@ export class Interpreter {
         }
 
         const range = AbsoluteCellRange.fromCellRange(ast, state.formulaAddress)
-        state.activeEdgeCollector?.recordRangeEdge(state.formulaVertex, range.start, range.end)
+        state.recordRangeAccess(range.start, range.end)
         const arrayVertex = this.dependencyGraph.getArray(range)
 
         if (arrayVertex) {
@@ -222,13 +224,20 @@ export class Interpreter {
           } else if (array instanceof CellError) {
             return array
           } else if (array instanceof ArrayValue) {
-            return SimpleRangeValue.fromRange(array.raw(), range, this.dependencyGraph, this.rangeAccessRecorder(state, range))
+            return SimpleRangeValue.fromRange(
+              array.raw(),
+              range,
+              this.dependencyGraph,
+              this.rangeAccessRecorder(state, range),
+              this.rangeResolveRecorder(state, range),
+              (address) => state.getCellValue(this.dependencyGraph, address),
+            )
           } else {
             throw new Error('Unknown array')
           }
         }
 
-        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range))
+        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range), this.rangeResolveRecorder(state, range), (address) => state.getCellValue(this.dependencyGraph, address))
       }
       case AstNodeType.COLUMN_RANGE: {
         if (!this.isSheetValid(ast.start) || !this.isSheetValid(ast.end)) {
@@ -239,8 +248,8 @@ export class Interpreter {
           return new CellError(ErrorType.REF, ErrorMessage.RangeManySheets)
         }
         const range = AbsoluteColumnRange.fromColumnRange(ast, state.formulaAddress)
-        state.activeEdgeCollector?.recordRangeEdge(state.formulaVertex, range.start, range.end)
-        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range))
+        state.recordRangeAccess(range.start, range.end)
+        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range), this.rangeResolveRecorder(state, range), (address) => state.getCellValue(this.dependencyGraph, address))
       }
       case AstNodeType.ROW_RANGE: {
         if (!this.isSheetValid(ast.start) || !this.isSheetValid(ast.end)) {
@@ -251,8 +260,8 @@ export class Interpreter {
           return new CellError(ErrorType.REF, ErrorMessage.RangeManySheets)
         }
         const range = AbsoluteRowRange.fromRowRangeAst(ast, state.formulaAddress)
-        state.activeEdgeCollector?.recordRangeEdge(state.formulaVertex, range.start, range.end)
-        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range))
+        state.recordRangeAccess(range.start, range.end)
+        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range), this.rangeResolveRecorder(state, range), (address) => state.getCellValue(this.dependencyGraph, address))
       }
       case AstNodeType.PARENTHESIS: {
         return this.evaluateAst(ast.expression, state)
@@ -483,11 +492,20 @@ export class Interpreter {
   }
 
   private rangeAccessRecorder(state: InterpreterState, range: AbsoluteCellRange): ((address: SimpleCellAddress) => void) | undefined {
-    if (state.formulaVertex === undefined || state.activeEdgeCollector === undefined) {
+    if (!state.shouldTrackRangeAccess()) {
       return undefined
     }
     return (address: SimpleCellAddress) => {
-      state.activeEdgeCollector?.recordRangeCellEdge(state.formulaVertex, range.start, range.end, address)
+      state.recordRangeCellAccess(range.start, range.end, address)
+    }
+  }
+
+  private rangeResolveRecorder(state: InterpreterState, range: AbsoluteCellRange): ((address: SimpleCellAddress) => void) | undefined {
+    if (state.probeAccessTracker === undefined) {
+      return undefined
+    }
+    return (address: SimpleCellAddress) => {
+      state.probeAccessTracker?.recordRangeCell(range.start, range.end, address)
     }
   }
 }

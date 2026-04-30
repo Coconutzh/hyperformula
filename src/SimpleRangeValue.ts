@@ -8,7 +8,7 @@ import {ArraySize} from './ArraySize'
 import {CellError, ErrorType, simpleCellAddress, SimpleCellAddress} from './Cell'
 import {DependencyGraph} from './DependencyGraph'
 import {ErrorMessage} from './error-message'
-import {InternalScalarValue, isExtendedNumber} from './interpreter/InterpreterValue'
+import {InternalScalarValue, InterpreterValue, isExtendedNumber} from './interpreter/InterpreterValue'
 
 /**
  * A class that represents a range of data.
@@ -34,6 +34,8 @@ export class SimpleRangeValue {
     private readonly dependencyGraph?: DependencyGraph,
     private _hasOnlyNumbers?: boolean,
     private readonly onCellAccess?: (address: SimpleCellAddress) => void,
+    private readonly onCellResolve?: (address: SimpleCellAddress) => void,
+    private readonly cellValueGetter?: (address: SimpleCellAddress) => InterpreterValue,
   ) {
     this.size = _data === undefined
       ? new ArraySize(range!.effectiveWidth(dependencyGraph!), range!.effectiveHeight(dependencyGraph!))
@@ -51,8 +53,8 @@ export class SimpleRangeValue {
   /**
    * A factory method. Returns a `SimpleRangeValue` object with the provided range address and the provided data.
    */
-  public static fromRange(data: InternalScalarValue[][], range: AbsoluteCellRange, dependencyGraph: DependencyGraph, onCellAccess?: (address: SimpleCellAddress) => void): SimpleRangeValue {
-    return new SimpleRangeValue(data, range, dependencyGraph, true, onCellAccess)
+  public static fromRange(data: InternalScalarValue[][], range: AbsoluteCellRange, dependencyGraph: DependencyGraph, onCellAccess?: (address: SimpleCellAddress) => void, onCellResolve?: (address: SimpleCellAddress) => void, cellValueGetter?: (address: SimpleCellAddress) => InterpreterValue): SimpleRangeValue {
+    return new SimpleRangeValue(data, range, dependencyGraph, true, onCellAccess, onCellResolve, cellValueGetter)
   }
 
   /**
@@ -72,8 +74,8 @@ export class SimpleRangeValue {
   /**
    * A factory method. Returns a `SimpleRangeValue` object with the provided range address.
    */
-  public static onlyRange(range: AbsoluteCellRange, dependencyGraph: DependencyGraph, onCellAccess?: (address: SimpleCellAddress) => void): SimpleRangeValue {
-    return new SimpleRangeValue(undefined, range, dependencyGraph, undefined, onCellAccess)
+  public static onlyRange(range: AbsoluteCellRange, dependencyGraph: DependencyGraph, onCellAccess?: (address: SimpleCellAddress) => void, onCellResolve?: (address: SimpleCellAddress) => void, cellValueGetter?: (address: SimpleCellAddress) => InterpreterValue): SimpleRangeValue {
+    return new SimpleRangeValue(undefined, range, dependencyGraph, undefined, onCellAccess, onCellResolve, cellValueGetter)
   }
 
   /**
@@ -223,7 +225,10 @@ export class SimpleRangeValue {
 
     this._hasOnlyNumbers = true
     this._data = this.range!.addressesArrayMap(this.dependencyGraph!, cellFromRange => {
-      const value = this.dependencyGraph!.getCellValue(cellFromRange)
+      this.onCellResolve?.(cellFromRange)
+      const value = this.cellValueGetter
+        ? this.cellValueGetter(cellFromRange)
+        : this.dependencyGraph!.getCellValue(cellFromRange)
       if (value instanceof SimpleRangeValue) {
         this._hasOnlyNumbers = false
         return new CellError(ErrorType.VALUE, ErrorMessage.ScalarExpected)

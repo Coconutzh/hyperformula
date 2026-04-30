@@ -209,7 +209,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     if (range === undefined) {
       searchedRange = SimpleRangeValue.onlyValues(rangeValue.data.map((arg) => [arg[0]]))
     } else {
-      searchedRange = SimpleRangeValue.onlyRange(AbsoluteCellRange.spanFrom(range.start, 1, range.height()), this.dependencyGraph)
+      searchedRange = SimpleRangeValue.onlyRange(AbsoluteCellRange.spanFrom(range.start, 1, range.height()), this.dependencyGraph, undefined, undefined, (address) => state.getCellValue(this.dependencyGraph, address))
     }
     const rowIndex = this.searchInRange(
       key,
@@ -233,7 +233,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
       this.recordRangeDependencyAccess(state, range, simpleCellAddress(range.sheet, range.start.col, range.start.row + rowIndex))
       const address = simpleCellAddress(range.sheet, range.start.col + index, range.start.row + rowIndex)
       this.recordRangeDependencyAccess(state, range, address)
-      value = this.dependencyGraph.getCellValue(address)
+      value = state.getCellValue(this.dependencyGraph, address)
     }
 
     if (value instanceof SimpleRangeValue) {
@@ -248,7 +248,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     if (range === undefined) {
       searchedRange = SimpleRangeValue.onlyValues([rangeValue.data[0]])
     } else {
-      searchedRange = SimpleRangeValue.onlyRange(AbsoluteCellRange.spanFrom(range.start, range.width(), 1), this.dependencyGraph)
+      searchedRange = SimpleRangeValue.onlyRange(AbsoluteCellRange.spanFrom(range.start, range.width(), 1), this.dependencyGraph, undefined, undefined, (address) => state.getCellValue(this.dependencyGraph, address))
     }
     const colIndex = this.searchInRange(
       key,
@@ -270,7 +270,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
       this.recordRangeDependencyAccess(state, range, simpleCellAddress(range.sheet, range.start.col + colIndex, range.start.row))
       const address = simpleCellAddress(range.sheet, range.start.col + colIndex, range.start.row + index)
       this.recordRangeDependencyAccess(state, range, address)
-      value = this.dependencyGraph.getCellValue(address)
+      value = state.getCellValue(this.dependencyGraph, address)
     }
 
     if (value instanceof SimpleRangeValue) {
@@ -359,6 +359,6 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
   }
 
   private recordRangeDependencyAccess(state: InterpreterState, range: AbsoluteCellRange, address: SimpleCellAddress): void {
-    state.activeEdgeCollector?.recordRangeCellEdge(state.formulaVertex, range.start, range.end, address)
+    state.recordRangeCellAccess(range.start, range.end, address)
   }
 }
