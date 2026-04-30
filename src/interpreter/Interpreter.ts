@@ -6,7 +6,7 @@
 import {AbsoluteCellRange, AbsoluteColumnRange, AbsoluteRowRange} from '../AbsoluteCellRange'
 import {ArraySizePredictor} from '../ArraySize'
 import {ArrayValue, NotComputedArray} from '../ArrayValue'
-import {CellError, ErrorType, isColOrRowInvalid} from '../Cell'
+import {CellError, ErrorType, isColOrRowInvalid, SimpleCellAddress} from '../Cell'
 import {Config} from '../Config'
 import {DateTimeHelper} from '../DateTimeHelper'
 import {DependencyGraph} from '../DependencyGraph'
@@ -222,13 +222,13 @@ export class Interpreter {
           } else if (array instanceof CellError) {
             return array
           } else if (array instanceof ArrayValue) {
-            return SimpleRangeValue.fromRange(array.raw(), range, this.dependencyGraph)
+            return SimpleRangeValue.fromRange(array.raw(), range, this.dependencyGraph, this.rangeAccessRecorder(state, range))
           } else {
             throw new Error('Unknown array')
           }
         }
 
-        return SimpleRangeValue.onlyRange(range, this.dependencyGraph)
+        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range))
       }
       case AstNodeType.COLUMN_RANGE: {
         if (!this.isSheetValid(ast.start) || !this.isSheetValid(ast.end)) {
@@ -240,7 +240,7 @@ export class Interpreter {
         }
         const range = AbsoluteColumnRange.fromColumnRange(ast, state.formulaAddress)
         state.activeEdgeCollector?.recordRangeEdge(state.formulaVertex, range.start, range.end)
-        return SimpleRangeValue.onlyRange(range, this.dependencyGraph)
+        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range))
       }
       case AstNodeType.ROW_RANGE: {
         if (!this.isSheetValid(ast.start) || !this.isSheetValid(ast.end)) {
@@ -252,7 +252,7 @@ export class Interpreter {
         }
         const range = AbsoluteRowRange.fromRowRangeAst(ast, state.formulaAddress)
         state.activeEdgeCollector?.recordRangeEdge(state.formulaVertex, range.start, range.end)
-        return SimpleRangeValue.onlyRange(range, this.dependencyGraph)
+        return SimpleRangeValue.onlyRange(range, this.dependencyGraph, this.rangeAccessRecorder(state, range))
       }
       case AstNodeType.PARENTHESIS: {
         return this.evaluateAst(ast.expression, state)
@@ -480,6 +480,15 @@ export class Interpreter {
     }
 
     return op(arg1, arg2)
+  }
+
+  private rangeAccessRecorder(state: InterpreterState, range: AbsoluteCellRange): ((address: SimpleCellAddress) => void) | undefined {
+    if (state.formulaVertex === undefined || state.activeEdgeCollector === undefined) {
+      return undefined
+    }
+    return (address: SimpleCellAddress) => {
+      state.activeEdgeCollector?.recordRangeCellEdge(state.formulaVertex, range.start, range.end, address)
+    }
   }
 }
 

@@ -33,6 +33,7 @@ export class SimpleRangeValue {
     public readonly range?: AbsoluteCellRange,
     private readonly dependencyGraph?: DependencyGraph,
     private _hasOnlyNumbers?: boolean,
+    private readonly onCellAccess?: (address: SimpleCellAddress) => void,
   ) {
     this.size = _data === undefined
       ? new ArraySize(range!.effectiveWidth(dependencyGraph!), range!.effectiveHeight(dependencyGraph!))
@@ -50,8 +51,8 @@ export class SimpleRangeValue {
   /**
    * A factory method. Returns a `SimpleRangeValue` object with the provided range address and the provided data.
    */
-  public static fromRange(data: InternalScalarValue[][], range: AbsoluteCellRange, dependencyGraph: DependencyGraph): SimpleRangeValue {
-    return new SimpleRangeValue(data, range, dependencyGraph, true)
+  public static fromRange(data: InternalScalarValue[][], range: AbsoluteCellRange, dependencyGraph: DependencyGraph, onCellAccess?: (address: SimpleCellAddress) => void): SimpleRangeValue {
+    return new SimpleRangeValue(data, range, dependencyGraph, true, onCellAccess)
   }
 
   /**
@@ -71,8 +72,8 @@ export class SimpleRangeValue {
   /**
    * A factory method. Returns a `SimpleRangeValue` object with the provided range address.
    */
-  public static onlyRange(range: AbsoluteCellRange, dependencyGraph: DependencyGraph): SimpleRangeValue {
-    return new SimpleRangeValue(undefined, range, dependencyGraph, undefined)
+  public static onlyRange(range: AbsoluteCellRange, dependencyGraph: DependencyGraph, onCellAccess?: (address: SimpleCellAddress) => void): SimpleRangeValue {
+    return new SimpleRangeValue(undefined, range, dependencyGraph, undefined, onCellAccess)
   }
 
   /**
@@ -112,11 +113,18 @@ export class SimpleRangeValue {
     const ret = []
     for (let i = 0; i < this._data!.length; i++) {
       for (let j = 0; j < this._data![0].length; j++) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        ret.push(this._data![i][j])
+        ret.push(this.getValueAt(i, j))
       }
     }
     return ret
+  }
+
+  public getValueAt(row: number, col: number): InternalScalarValue {
+    this.ensureThatComputed()
+    if (this.range !== undefined) {
+      this.onCellAccess?.(simpleCellAddress(this.range.sheet, this.range.start.col + col, this.range.start.row + row))
+    }
+    return this._data![row][col]
   }
 
   /**
@@ -140,7 +148,7 @@ export class SimpleRangeValue {
     this.ensureThatComputed()
     for (let row = 0; row < this.size.height; ++row) {
       for (let col = 0; col < this.size.width; ++col) {
-        yield [this._data![row][col], simpleCellAddress(leftCorner.sheet, leftCorner.col + col, leftCorner.row + row)]
+        yield [this.getValueAt(row, col), simpleCellAddress(leftCorner.sheet, leftCorner.col + col, leftCorner.row + row)]
       }
     }
   }

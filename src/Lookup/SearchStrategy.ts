@@ -18,10 +18,12 @@ export interface SearchOptions {
   ordering: 'asc' | 'desc' | 'none',
   ifNoMatch: 'returnLowerBound' | 'returnUpperBound' | 'returnNotFound',
   returnOccurrence?: 'first' | 'last',
+  onRangeValueAccess?: (address: SimpleCellAddress) => void,
 }
 
 export interface AdvancedFindOptions {
   returnOccurrence?: 'first' | 'last',
+  onRangeValueAccess?: (address: SimpleCellAddress) => void,
 }
 
 export interface SearchStrategy {

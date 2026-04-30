@@ -3,6 +3,7 @@
  * Copyright (c) 2025 Handsoncode. All rights reserved.
  */
 
+import {SimpleCellAddress} from '../Cell'
 import {DependencyGraph} from '../DependencyGraph'
 import {
   getRawValue,
@@ -23,11 +24,8 @@ export abstract class AdvancedFind {
   ) {
   }
 
-  public advancedFind(keyMatcher: (arg: RawInterpreterValue) => boolean, rangeValue: SimpleRangeValue, { returnOccurrence }: AdvancedFindOptions = { returnOccurrence: 'first' }): number {
-    const range = rangeValue.range
-    const values: InternalScalarValue[] = (range === undefined)
-      ? rangeValue.valuesFromTopLeftCorner()
-      : this.dependencyGraph.computeListOfValuesInRange(range)
+  public advancedFind(keyMatcher: (arg: RawInterpreterValue) => boolean, rangeValue: SimpleRangeValue, { returnOccurrence, onRangeValueAccess }: AdvancedFindOptions = { returnOccurrence: 'first' }): number {
+    const values = this.valuesFromRange(rangeValue, onRangeValueAccess)
     
     const initialIterationIndex = returnOccurrence === 'first' ? 0 : values.length-1
     const iterationCondition = returnOccurrence === 'first' ? (i: number) => i < values.length : (i: number) => i >= 0
@@ -41,7 +39,7 @@ export abstract class AdvancedFind {
     return NOT_FOUND
   }
 
-  protected basicFind(searchKey: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, searchCoordinate: 'col' | 'row', { ordering, ifNoMatch, returnOccurrence }: SearchOptions): number {
+  protected basicFind(searchKey: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, searchCoordinate: 'col' | 'row', { ordering, ifNoMatch, returnOccurrence, onRangeValueAccess }: SearchOptions): number {
     const normalizedSearchKey = typeof searchKey === 'string' ? forceNormalizeString(searchKey) : searchKey
     const range = rangeValue.range
 
@@ -50,15 +48,30 @@ export abstract class AdvancedFind {
     }
 
     if (ordering === 'none') {
-      return this.findNormalizedValue(normalizedSearchKey, this.dependencyGraph.computeListOfValuesInRange(range), ifNoMatch, returnOccurrence)
+      return this.findNormalizedValue(normalizedSearchKey, this.valuesFromRange(rangeValue, onRangeValueAccess), ifNoMatch, returnOccurrence)
     }
 
     return findLastOccurrenceInOrderedRange(
       normalizedSearchKey,
       range,
       { searchCoordinate, orderingDirection: ordering, ifNoMatch },
-      this.dependencyGraph
+      this.dependencyGraph,
+      onRangeValueAccess
     )
+  }
+
+  private valuesFromRange(rangeValue: SimpleRangeValue, onRangeValueAccess?: (address: SimpleCellAddress) => void): InternalScalarValue[] {
+    const range = rangeValue.range
+    if (range === undefined) {
+      return rangeValue.valuesFromTopLeftCorner()
+    }
+
+    const values: InternalScalarValue[] = []
+    for (const address of range.addresses(this.dependencyGraph)) {
+      onRangeValueAccess?.(address)
+      values.push(this.dependencyGraph.getScalarValue(address))
+    }
+    return values
   }
 
   protected findNormalizedValue(searchKey: RawNoErrorScalarValue, searchArray: InternalScalarValue[], ifNoMatch: 'returnLowerBound' | 'returnUpperBound' | 'returnNotFound' = 'returnNotFound', returnOccurrence: 'first' | 'last' = 'first'): number {

@@ -9,6 +9,7 @@ import {FormulaVertex} from '../DependencyGraph/FormulaVertex'
 export type ActiveDependency =
   | { kind: 'CELL', address: SimpleCellAddress }
   | { kind: 'RANGE', start: SimpleCellAddress, end: SimpleCellAddress }
+  | { kind: 'RANGE_CELL', start: SimpleCellAddress, end: SimpleCellAddress, address: SimpleCellAddress }
   | { kind: 'NAMED_EXPRESSION', expressionName: string, address: SimpleCellAddress }
 
 export interface ActiveEdgeSnapshot {
@@ -36,12 +37,27 @@ export class ActiveEdgeCollector {
     this.recordDependency(from.idInGraph, dependency)
   }
 
+  public recordRangeCellEdge(from: FormulaVertex | undefined, start: SimpleCellAddress, end: SimpleCellAddress, address: SimpleCellAddress): void {
+    if (from?.idInGraph === undefined) {
+      return
+    }
+    const dependency: ActiveDependency = { kind: 'RANGE_CELL', start, end, address }
+    this.recordDependency(from.idInGraph, dependency)
+  }
+
   public recordNamedExpressionEdge(from: FormulaVertex | undefined, expressionName: string, address: SimpleCellAddress): void {
     if (from?.idInGraph === undefined) {
       return
     }
     const dependency: ActiveDependency = { kind: 'NAMED_EXPRESSION', expressionName, address }
     this.recordDependency(from.idInGraph, dependency)
+  }
+
+  public clearFormulaEdges(from: FormulaVertex | undefined): void {
+    if (from?.idInGraph === undefined) {
+      return
+    }
+    this.dependenciesByFormula.delete(from.idInGraph)
   }
 
   public snapshot(): ActiveEdgeSnapshot {
@@ -79,6 +95,8 @@ export class ActiveEdgeCollector {
         return `C:${dependency.address.sheet}:${dependency.address.col}:${dependency.address.row}`
       case 'RANGE':
         return `R:${dependency.start.sheet}:${dependency.start.col}:${dependency.start.row}:${dependency.end.col}:${dependency.end.row}`
+      case 'RANGE_CELL':
+        return `RC:${dependency.start.sheet}:${dependency.start.col}:${dependency.start.row}:${dependency.end.col}:${dependency.end.row}:${dependency.address.sheet}:${dependency.address.col}:${dependency.address.row}`
       case 'NAMED_EXPRESSION':
         return `N:${dependency.expressionName.toLowerCase()}:${dependency.address.sheet}:${dependency.address.col}:${dependency.address.row}`
     }

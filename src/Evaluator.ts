@@ -17,13 +17,67 @@ import {EmptyValue, getRawValue, InterpreterValue} from './interpreter/Interpret
 import {SimpleRangeValue} from './SimpleRangeValue'
 import {LazilyTransformingAstService} from './LazilyTransformingAstService'
 import {ColumnSearchStrategy} from './Lookup/SearchStrategy'
-import {Ast, RelativeDependency} from './parser'
+import {Ast, RelativeDependency, simpleCellAddressToString, simpleCellRangeToString, Unparser} from './parser'
 import {Statistics, StatType} from './statistics'
 import {TopSortResult} from './DependencyGraph/TopSort'
+
+export interface CycleResolutionDebugDependency {
+  kind: ActiveDependency['kind'],
+  address?: string,
+  range?: string,
+  expressionName?: string,
+  coveredByPreciseRange?: boolean,
+}
+
+export interface CycleResolutionDebugFormula {
+  formulaId: number | null,
+  sheet: string,
+  address: string,
+  formula: string,
+  status: 'ordered' | 'unresolved',
+  probeFailed: boolean,
+  dependencyCounts: {
+    cell: number,
+    range: number,
+    rangeCell: number,
+    namedExpression: number,
+    coarseRange: number,
+  },
+  sccDependencyFormulaIds: number[],
+  sccDependencyAddresses: string[],
+  activeDependencies: CycleResolutionDebugDependency[],
+}
+
+export interface CycleResolutionDebugScc {
+  sccIndex: number,
+  formulaCount: number,
+  orderedCount: number,
+  unresolvedCount: number,
+  unresolvedFormulaIds: number[],
+  unresolvedAddresses: string[],
+  probeFailedFormulaIds: number[],
+  dependencyCounts: {
+    cell: number,
+    range: number,
+    rangeCell: number,
+    namedExpression: number,
+    coarseRange: number,
+  },
+  reason: 'probe_failed_or_still_cyclic' | 'still_cyclic_after_active_edges',
+  formulas: CycleResolutionDebugFormula[],
+}
+
+export interface CycleResolutionDebugSnapshot {
+  totalCyclicSccCount: number,
+  unresolvedSccCount: number,
+  unresolvedFormulaCount: number,
+  unresolvedSccs: CycleResolutionDebugScc[],
+}
 
 export class Evaluator {
   private activeEdgeCollector?: ActiveEdgeCollector
   private _activeEdgeSnapshot?: ActiveEdgeSnapshot
+  private _cycleResolutionSnapshot: CycleResolutionDebugSnapshot = Evaluator.emptyCycleResolutionSnapshot()
 
   constructor(
     private readonly config: Config,
@@ -32,11 +86,16 @@ export class Evaluator {
     private readonly lazilyTransformingAstService: LazilyTransformingAstService,
     private readonly dependencyGraph: DependencyGraph,
     private readonly columnSearch: ColumnSearchStrategy,
+    private readonly unparser: Unparser,
   ) {
   }
 
   public get activeEdgeSnapshot(): ActiveEdgeSnapshot | undefined {
     return this._activeEdgeSnapshot
+  }
+
+  public get cycleResolutionSnapshot(): CycleResolutionDebugSnapshot {
+    return this._cycleResolutionSnapshot
   }
 
   public run(): void {
@@ -167,8 +226,9 @@ export class Evaluator {
   private resolveCyclicSccs(cycled: Vertex[], cyclicSccs: Vertex[][], changes?: ContentChanges): void {
     const remainingCycledFormulas = new Set<FormulaVertex>(cycled.filter((vertex): vertex is FormulaVertex => vertex instanceof FormulaVertex))
     const processedFormulaIds = new Set<number>()
+    const unresolvedSccs: CycleResolutionDebugScc[] = []
 
-    for (const scc of cyclicSccs) {
+    for (const [sccIndex, scc] of cyclicSccs.entries()) {
       const sccFormulaVertices = scc.filter((vertex): vertex is FormulaVertex => vertex instanceof FormulaVertex)
       if (sccFormulaVertices.length === 0) {
         scc.forEach(vertex => {
@@ -209,6 +269,7 @@ export class Evaluator {
       })
 
       const [acyclicOrder, unresolved] = this.resolveOrderFromActiveEdges(sccFormulaVertices, probeFailedFormulaIds)
+      const finalUnresolved = new Set<FormulaVertex>(unresolved)
 
       acyclicOrder.forEach((vertex) => {
         try {
@@ -225,18 +286,28 @@ export class Evaluator {
           }
         } catch (e) {
           remainingCycledFormulas.add(vertex)
+          finalUnresolved.add(vertex)
           if (vertex.idInGraph !== undefined) {
             processedFormulaIds.add(vertex.idInGraph)
           }
         }
       })
 
-      unresolved.forEach((vertex) => {
+      finalUnresolved.forEach((vertex) => {
         remainingCycledFormulas.add(vertex)
         if (vertex.idInGraph !== undefined) {
           processedFormulaIds.add(vertex.idInGraph)
         }
       })
+
+      if (finalUnresolved.size > 0) {
+        unresolvedSccs.push(this.buildCycleResolutionDebugScc(
+          sccIndex,
+          sccFormulaVertices,
+          finalUnresolved,
+          probeFailedFormulaIds,
+        ))
+      }
     }
 
     cycled.forEach((vertex: Vertex) => {
@@ -255,6 +326,13 @@ export class Evaluator {
         vertex.setCellValue(new CellError(ErrorType.CYCLE, undefined, vertex))
       }
     })
+
+    this._cycleResolutionSnapshot = {
+      totalCyclicSccCount: cyclicSccs.length,
+      unresolvedSccCount: unresolvedSccs.length,
+      unresolvedFormulaCount: unresolvedSccs.reduce((sum, scc) => sum + scc.unresolvedCount, 0),
+      unresolvedSccs,
+    }
   }
 
   private resolveOrderFromActiveEdges(sccFormulaVertices: FormulaVertex[], forceUnresolved: Set<number> = new Set<number>()): [FormulaVertex[], FormulaVertex[]] {
@@ -338,13 +416,24 @@ export class Evaluator {
 
   private resolveDependenciesWithinScc(dependencies: ActiveDependency[], idToVertex: Map<number, FormulaVertex>): Set<number> {
     const dependencyIds = new Set<number>()
+    const rangesWithPreciseDependencies = new Set<string>()
+
     for (const dependency of dependencies) {
-      if (dependency.kind === 'CELL' || dependency.kind === 'NAMED_EXPRESSION') {
+      if (dependency.kind === 'RANGE_CELL') {
+        rangesWithPreciseDependencies.add(this.rangeDependencyKey(dependency.start, dependency.end))
+      }
+    }
+
+    for (const dependency of dependencies) {
+      if (dependency.kind === 'CELL' || dependency.kind === 'NAMED_EXPRESSION' || dependency.kind === 'RANGE_CELL') {
         const vertex = this.dependencyGraph.getCell(dependency.address)
         if (vertex instanceof FormulaVertex && vertex.idInGraph !== undefined && idToVertex.has(vertex.idInGraph)) {
           dependencyIds.add(vertex.idInGraph)
         }
       } else if (dependency.kind === 'RANGE') {
+        if (rangesWithPreciseDependencies.has(this.rangeDependencyKey(dependency.start, dependency.end))) {
+          continue
+        }
         for (const [vertexId, formulaVertex] of idToVertex.entries()) {
           const address = formulaVertex.getAddress(this.lazilyTransformingAstService)
           if (address.sheet !== dependency.start.sheet) {
@@ -358,6 +447,156 @@ export class Evaluator {
       }
     }
     return dependencyIds
+  }
+
+  private rangeDependencyKey(start: SimpleCellAddress, end: SimpleCellAddress): string {
+    return `${start.sheet}:${start.col}:${start.row}:${end.col}:${end.row}`
+  }
+
+  private buildCycleResolutionDebugScc(
+    sccIndex: number,
+    sccFormulaVertices: FormulaVertex[],
+    finalUnresolved: Set<FormulaVertex>,
+    probeFailedFormulaIds: Set<number>,
+  ): CycleResolutionDebugScc {
+    const snapshot = this.activeEdgeCollector?.snapshot()
+    const idToVertex = new Map<number, FormulaVertex>()
+    sccFormulaVertices.forEach((vertex) => {
+      if (vertex.idInGraph !== undefined) {
+        idToVertex.set(vertex.idInGraph, vertex)
+      }
+    })
+
+    const formulas = sccFormulaVertices.map((vertex) => this.buildCycleResolutionDebugFormula(
+      vertex,
+      finalUnresolved,
+      probeFailedFormulaIds,
+      idToVertex,
+      snapshot,
+    ))
+
+    return {
+      sccIndex,
+      formulaCount: sccFormulaVertices.length,
+      orderedCount: formulas.filter((formula) => formula.status === 'ordered').length,
+      unresolvedCount: formulas.filter((formula) => formula.status === 'unresolved').length,
+      unresolvedFormulaIds: formulas.filter((formula) => formula.status === 'unresolved' && formula.formulaId !== null).map((formula) => formula.formulaId as number),
+      unresolvedAddresses: formulas.filter((formula) => formula.status === 'unresolved').map((formula) => formula.address),
+      probeFailedFormulaIds: formulas.filter((formula) => formula.probeFailed && formula.formulaId !== null).map((formula) => formula.formulaId as number),
+      dependencyCounts: {
+        cell: formulas.reduce((sum, formula) => sum + formula.dependencyCounts.cell, 0),
+        range: formulas.reduce((sum, formula) => sum + formula.dependencyCounts.range, 0),
+        rangeCell: formulas.reduce((sum, formula) => sum + formula.dependencyCounts.rangeCell, 0),
+        namedExpression: formulas.reduce((sum, formula) => sum + formula.dependencyCounts.namedExpression, 0),
+        coarseRange: formulas.reduce((sum, formula) => sum + formula.dependencyCounts.coarseRange, 0),
+      },
+      reason: probeFailedFormulaIds.size > 0 ? 'probe_failed_or_still_cyclic' : 'still_cyclic_after_active_edges',
+      formulas,
+    }
+  }
+
+  private buildCycleResolutionDebugFormula(
+    vertex: FormulaVertex,
+    finalUnresolved: Set<FormulaVertex>,
+    probeFailedFormulaIds: Set<number>,
+    idToVertex: Map<number, FormulaVertex>,
+    snapshot: ActiveEdgeSnapshot | undefined,
+  ): CycleResolutionDebugFormula {
+    const address = vertex.getAddress(this.lazilyTransformingAstService)
+    const formulaId = vertex.idInGraph ?? null
+    const dependencies = formulaId !== null ? (snapshot?.byFormula.get(formulaId) ?? []) : []
+    const preciseRangeKeys = this.collectPreciseRangeKeys(dependencies)
+    const dependencyFormulaIds = formulaId !== null
+      ? [...this.resolveDependenciesWithinScc(dependencies, idToVertex)].sort((a, b) => a - b)
+      : []
+
+    return {
+      formulaId,
+      sheet: this.dependencyGraph.sheetMapping.getSheetNameOrThrowError(address.sheet, { includePlaceholders: true }),
+      address: this.formatAddress(address),
+      formula: this.unparser.unparse(vertex.getFormula(this.lazilyTransformingAstService), address),
+      status: finalUnresolved.has(vertex) ? 'unresolved' : 'ordered',
+      probeFailed: formulaId !== null ? probeFailedFormulaIds.has(formulaId) : false,
+      dependencyCounts: {
+        cell: dependencies.filter((dependency) => dependency.kind === 'CELL').length,
+        range: dependencies.filter((dependency) => dependency.kind === 'RANGE').length,
+        rangeCell: dependencies.filter((dependency) => dependency.kind === 'RANGE_CELL').length,
+        namedExpression: dependencies.filter((dependency) => dependency.kind === 'NAMED_EXPRESSION').length,
+        coarseRange: dependencies.filter((dependency) => dependency.kind === 'RANGE' && !preciseRangeKeys.has(this.rangeDependencyKey(dependency.start, dependency.end))).length,
+      },
+      sccDependencyFormulaIds: dependencyFormulaIds,
+      sccDependencyAddresses: dependencyFormulaIds
+        .map((dependencyId) => idToVertex.get(dependencyId))
+        .filter((candidate): candidate is FormulaVertex => candidate !== undefined)
+        .map((candidate) => this.formatAddress(candidate.getAddress(this.lazilyTransformingAstService))),
+      activeDependencies: dependencies.map((dependency) => this.formatCycleDependencyDebug(dependency, preciseRangeKeys)),
+    }
+  }
+
+  private formatCycleDependencyDebug(
+    dependency: ActiveDependency,
+    preciseRangeKeys: Set<string>,
+  ): CycleResolutionDebugDependency {
+    switch (dependency.kind) {
+      case 'CELL':
+        return {
+          kind: dependency.kind,
+          address: this.formatAddress(dependency.address),
+        }
+      case 'RANGE':
+        return {
+          kind: dependency.kind,
+          range: this.formatRange(dependency.start, dependency.end),
+          coveredByPreciseRange: preciseRangeKeys.has(this.rangeDependencyKey(dependency.start, dependency.end)),
+        }
+      case 'RANGE_CELL':
+        return {
+          kind: dependency.kind,
+          range: this.formatRange(dependency.start, dependency.end),
+          address: this.formatAddress(dependency.address),
+        }
+      case 'NAMED_EXPRESSION':
+        return {
+          kind: dependency.kind,
+          expressionName: dependency.expressionName,
+          address: this.formatAddress(dependency.address),
+        }
+    }
+  }
+
+  private collectPreciseRangeKeys(dependencies: ActiveDependency[]): Set<string> {
+    const preciseRangeKeys = new Set<string>()
+    for (const dependency of dependencies) {
+      if (dependency.kind === 'RANGE_CELL') {
+        preciseRangeKeys.add(this.rangeDependencyKey(dependency.start, dependency.end))
+      }
+    }
+    return preciseRangeKeys
+  }
+
+  private formatAddress(address: SimpleCellAddress): string {
+    return simpleCellAddressToString(
+      this.dependencyGraph.sheetMapping.getSheetNameOrThrowError.bind(this.dependencyGraph.sheetMapping),
+      address,
+      -1,
+    ) ?? `${address.sheet}:${address.col}:${address.row}`
+  }
+
+  private formatRange(start: SimpleCellAddress, end: SimpleCellAddress): string {
+    return simpleCellRangeToString(
+      this.dependencyGraph.sheetMapping.getSheetNameOrThrowError.bind(this.dependencyGraph.sheetMapping),
+      {start, end},
+      -1,
+    ) ?? `${this.formatAddress(start)}:${this.formatAddress(end)}`
+  }
+
+  private static emptyCycleResolutionSnapshot(): CycleResolutionDebugSnapshot {
+    return {
+      totalCyclicSccCount: 0,
+      unresolvedSccCount: 0,
+      unresolvedFormulaCount: 0,
+      unresolvedSccs: [],
+    }
   }
 
   private recomputeFormulaVertexValue(vertex: FormulaVertex): InterpreterValue {

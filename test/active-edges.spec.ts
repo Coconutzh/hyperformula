@@ -37,4 +37,23 @@ describe('Active edge sampling', () => {
 
     hf.destroy()
   })
+
+  it('should record only the coerced scalar cell from a range reference', () => {
+    const hf = HyperFormula.buildFromArray([
+      [1, '=A1:A2+1'],
+      [2, null],
+    ], {licenseKey: 'gpl-v3'})
+
+    const value = hf.getCellValue(adr('B1'))
+    expect(value).toBe(2)
+
+    const snapshot = hf.evaluator.activeEdgeSnapshot
+    expect(snapshot).toBeDefined()
+
+    const dependencyKeys = new Set(snapshot ? [...snapshot.byDependency.keys()] : [])
+    expect(dependencyKeys.has('RC:0:0:0:0:1:0:0:0')).toBe(true)
+    expect(dependencyKeys.has('RC:0:0:0:0:1:0:0:1')).toBe(false)
+
+    hf.destroy()
+  })
 })

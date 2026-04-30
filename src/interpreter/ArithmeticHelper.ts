@@ -819,12 +819,12 @@ export function coerceRangeToScalar(arg: SimpleRangeValue, state: InterpreterSta
     if (range.width() === 1) {
       const offset = state.formulaAddress.row - range.start.row
       if (offset >= 0 && offset < range.height()) {
-        return arg.data[offset][0]
+        return arg.getValueAt(offset, 0)
       }
     } else if (range.height() === 1) {
       const offset = state.formulaAddress.col - range.start.col
       if (offset >= 0 && offset < range.width()) {
-        return arg.data[0][offset]
+        return arg.getValueAt(0, offset)
       }
     }
   }

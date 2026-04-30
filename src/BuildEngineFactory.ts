@@ -125,7 +125,7 @@ export class BuildEngineFactory {
       crudOperations.operations.addNamedExpression(entry.name, entry.expression, entry.scope, entry.options)
     })
 
-    const evaluator = new Evaluator(config, stats, interpreter, lazilyTransformingAstService, dependencyGraph, columnSearch)
+    const evaluator = new Evaluator(config, stats, interpreter, lazilyTransformingAstService, dependencyGraph, columnSearch, unparser)
     evaluator.run()
 
     stats.end(StatType.BUILD_ENGINE_TOTAL)

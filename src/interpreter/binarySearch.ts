@@ -4,7 +4,7 @@
  */
 
 import {AbsoluteCellRange} from '../AbsoluteCellRange'
-import {CellError, simpleCellAddress} from '../Cell'
+import {CellError, simpleCellAddress, SimpleCellAddress} from '../Cell'
 import {DependencyGraph} from '../DependencyGraph'
 import {EmptyValue, getRawValue, RawInterpreterValue, RawNoErrorScalarValue} from './InterpreterValue'
 
@@ -27,13 +27,20 @@ export function findLastOccurrenceInOrderedRange(
   range: AbsoluteCellRange,
   { searchCoordinate, orderingDirection, ifNoMatch }: { searchCoordinate: 'row' | 'col', orderingDirection: 'asc' | 'desc', ifNoMatch: 'returnLowerBound' | 'returnUpperBound' | 'returnNotFound' },
   dependencyGraph: DependencyGraph,
+  onRangeValueAccess?: (address: SimpleCellAddress) => void,
 ): number {
   const start = range.start[searchCoordinate]
   const end = searchCoordinate === 'col' ? range.effectiveEndColumn(dependencyGraph) : range.effectiveEndRow(dependencyGraph)
 
-  const getValueFromIndexFn = searchCoordinate === 'col'
-    ? (index: number) => getRawValue(dependencyGraph.getCellValue(simpleCellAddress(range.sheet, index, range.start.row)))
-    : (index: number) => getRawValue(dependencyGraph.getCellValue(simpleCellAddress(range.sheet, range.start.col, index)))
+  const getAddressFromIndex = searchCoordinate === 'col'
+    ? (index: number) => simpleCellAddress(range.sheet, index, range.start.row)
+    : (index: number) => simpleCellAddress(range.sheet, range.start.col, index)
+
+  const getValueFromIndexFn = (index: number) => {
+    const address = getAddressFromIndex(index)
+    onRangeValueAccess?.(address)
+    return getRawValue(dependencyGraph.getCellValue(address))
+  }
 
   const compareFn = orderingDirection === 'asc'
     ? (left: RawNoErrorScalarValue, right: RawInterpreterValue) => compare(left, right)

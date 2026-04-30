@@ -4,7 +4,7 @@
  */
 
 import { AbsoluteCellRange } from '../../AbsoluteCellRange'
-import { CellError, CellRange, ErrorType, simpleCellAddress } from '../../Cell'
+import { CellError, CellRange, ErrorType, simpleCellAddress, SimpleCellAddress } from '../../Cell'
 import { ErrorMessage } from '../../error-message'
 import { RowSearchStrategy } from '../../Lookup/RowSearchStrategy'
 import { SearchOptions, SearchStrategy } from '../../Lookup/SearchStrategy'
@@ -89,7 +89,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
         ifNoMatch: sorted ? 'returnLowerBound' : 'returnNotFound'
       }
 
-      return this.doVlookup(zeroIfEmpty(key), rangeValue, index - 1, searchOptions)
+      return this.doVlookup(zeroIfEmpty(key), rangeValue, index - 1, searchOptions, state)
     })
   }
 
@@ -116,7 +116,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
         ifNoMatch: sorted ? 'returnLowerBound' : 'returnNotFound'
       }
 
-      return this.doHlookup(zeroIfEmpty(key), rangeValue, index - 1, searchOptions)
+      return this.doHlookup(zeroIfEmpty(key), rangeValue, index - 1, searchOptions, state)
     })
   }
 
@@ -149,7 +149,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
             : 'returnNotFound'
       }
 
-      return this.doXlookup(zeroIfEmpty(key), lookupRange, returnRange, notFoundFlag, isWildcardMatchMode, searchOptions)
+      return this.doXlookup(zeroIfEmpty(key), lookupRange, returnRange, notFoundFlag, isWildcardMatchMode, searchOptions, state)
     })
   }
 
@@ -186,23 +186,23 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
 
   public match(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
     return this.runFunction(ast.args, state, this.metadata('MATCH'), (key: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, type: number) => {
-      return this.doMatch(zeroIfEmpty(key), rangeValue, type)
+      return this.doMatch(zeroIfEmpty(key), rangeValue, type, state)
     })
   }
 
-  protected searchInRange(key: RawNoErrorScalarValue, range: SimpleRangeValue, isWildcardMatchMode: boolean, searchOptions: SearchOptions, searchStrategy: SearchStrategy): number {
+  protected searchInRange(key: RawNoErrorScalarValue, range: SimpleRangeValue, isWildcardMatchMode: boolean, searchOptions: SearchOptions, searchStrategy: SearchStrategy, onRangeValueAccess?: (address: SimpleCellAddress) => void): number {
     if (isWildcardMatchMode && typeof key === 'string' && this.arithmeticHelper.requiresRegex(key)) {
       return searchStrategy.advancedFind(
         this.arithmeticHelper.eqMatcherFunction(key),
         range,
-        { returnOccurrence: searchOptions.returnOccurrence }
+        { returnOccurrence: searchOptions.returnOccurrence, onRangeValueAccess }
       )
     }
 
-    return searchStrategy.find(key, range, searchOptions)
+    return searchStrategy.find(key, range, { ...searchOptions, onRangeValueAccess })
   }
 
-  private doVlookup(key: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, index: number, searchOptions: SearchOptions): InternalScalarValue {
+  private doVlookup(key: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, index: number, searchOptions: SearchOptions, state: InterpreterState): InternalScalarValue {
     this.dependencyGraph.stats.start(StatType.VLOOKUP)
     const range = rangeValue.range
     let searchedRange
@@ -211,7 +211,14 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     } else {
       searchedRange = SimpleRangeValue.onlyRange(AbsoluteCellRange.spanFrom(range.start, 1, range.height()), this.dependencyGraph)
     }
-    const rowIndex = this.searchInRange(key, searchedRange, searchOptions.ordering === 'none', searchOptions, this.columnSearch)
+    const rowIndex = this.searchInRange(
+      key,
+      searchedRange,
+      searchOptions.ordering === 'none',
+      searchOptions,
+      this.columnSearch,
+      range ? (address) => this.recordRangeDependencyAccess(state, range, address) : undefined
+    )
 
     this.dependencyGraph.stats.end(StatType.VLOOKUP)
 
@@ -223,7 +230,9 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     if (range === undefined) {
       value = rangeValue.data[rowIndex][index]
     } else {
+      this.recordRangeDependencyAccess(state, range, simpleCellAddress(range.sheet, range.start.col, range.start.row + rowIndex))
       const address = simpleCellAddress(range.sheet, range.start.col + index, range.start.row + rowIndex)
+      this.recordRangeDependencyAccess(state, range, address)
       value = this.dependencyGraph.getCellValue(address)
     }
 
@@ -233,7 +242,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     return value
   }
 
-  private doHlookup(key: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, index: number, searchOptions: SearchOptions): InternalScalarValue {
+  private doHlookup(key: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, index: number, searchOptions: SearchOptions, state: InterpreterState): InternalScalarValue {
     const range = rangeValue.range
     let searchedRange
     if (range === undefined) {
@@ -241,7 +250,14 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     } else {
       searchedRange = SimpleRangeValue.onlyRange(AbsoluteCellRange.spanFrom(range.start, range.width(), 1), this.dependencyGraph)
     }
-    const colIndex = this.searchInRange(key, searchedRange, searchOptions.ordering === 'none', searchOptions, this.rowSearch)
+    const colIndex = this.searchInRange(
+      key,
+      searchedRange,
+      searchOptions.ordering === 'none',
+      searchOptions,
+      this.rowSearch,
+      range ? (address) => this.recordRangeDependencyAccess(state, range, address) : undefined
+    )
 
     if (colIndex === -1) {
       return new CellError(ErrorType.NA, ErrorMessage.ValueNotFound)
@@ -251,7 +267,9 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     if (range === undefined) {
       value = rangeValue.data[index][colIndex]
     } else {
+      this.recordRangeDependencyAccess(state, range, simpleCellAddress(range.sheet, range.start.col + colIndex, range.start.row))
       const address = simpleCellAddress(range.sheet, range.start.col + colIndex, range.start.row + index)
+      this.recordRangeDependencyAccess(state, range, address)
       value = this.dependencyGraph.getCellValue(address)
     }
 
@@ -261,7 +279,7 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     return value
   }
 
-  private doXlookup(key: RawNoErrorScalarValue, lookupRange: SimpleRangeValue, returnRange: SimpleRangeValue, notFoundFlag: any, isWildcardMatchMode: boolean, searchOptions: SearchOptions): InterpreterValue {
+  private doXlookup(key: RawNoErrorScalarValue, lookupRange: SimpleRangeValue, returnRange: SimpleRangeValue, notFoundFlag: any, isWildcardMatchMode: boolean, searchOptions: SearchOptions, state: InterpreterState): InterpreterValue {
     const isVerticalSearch = lookupRange.width() === 1 && returnRange.height() === lookupRange.height()
     const isHorizontalSearch = lookupRange.height() === 1 && returnRange.width() === lookupRange.width()
 
@@ -270,17 +288,43 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     }
 
     const searchStrategy = isVerticalSearch ? this.columnSearch : this.rowSearch
-    const indexFound = this.searchInRange(key, lookupRange, isWildcardMatchMode, searchOptions, searchStrategy)
+    const indexFound = this.searchInRange(
+      key,
+      lookupRange,
+      isWildcardMatchMode,
+      searchOptions,
+      searchStrategy,
+      lookupRange.range ? (address) => this.recordRangeDependencyAccess(state, lookupRange.range!, address) : undefined
+    )
 
     if (indexFound === -1) {
       return (notFoundFlag == ErrorType.NA) ? new CellError(ErrorType.NA, ErrorMessage.ValueNotFound) : notFoundFlag
+    }
+
+    if (lookupRange.range !== undefined) {
+      const lookupAddress = isVerticalSearch
+        ? simpleCellAddress(lookupRange.range.sheet, lookupRange.range.start.col, lookupRange.range.start.row + indexFound)
+        : simpleCellAddress(lookupRange.range.sheet, lookupRange.range.start.col + indexFound, lookupRange.range.start.row)
+      this.recordRangeDependencyAccess(state, lookupRange.range, lookupAddress)
+    }
+
+    if (returnRange.range !== undefined) {
+      if (isVerticalSearch) {
+        for (let col = 0; col < returnRange.width(); col++) {
+          this.recordRangeDependencyAccess(state, returnRange.range, simpleCellAddress(returnRange.range.sheet, returnRange.range.start.col + col, returnRange.range.start.row + indexFound))
+        }
+      } else {
+        for (let row = 0; row < returnRange.height(); row++) {
+          this.recordRangeDependencyAccess(state, returnRange.range, simpleCellAddress(returnRange.range.sheet, returnRange.range.start.col + indexFound, returnRange.range.start.row + row))
+        }
+      }
     }
 
     const returnValues: InternalScalarValue[][] = isVerticalSearch ? [returnRange.data[indexFound]] : returnRange.data.map((row) => [row[indexFound]])
     return SimpleRangeValue.onlyValues(returnValues)
   }
 
-  private doMatch(key: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, type: number): InternalScalarValue {
+  private doMatch(key: RawNoErrorScalarValue, rangeValue: SimpleRangeValue, type: number, state: InterpreterState): InternalScalarValue {
     if (![-1, 0, 1].includes(type)) {
       return new CellError(ErrorType.VALUE, ErrorMessage.BadMode)
     }
@@ -293,11 +337,28 @@ export class LookupPlugin extends FunctionPlugin implements FunctionPluginTypech
     const searchOptions: SearchOptions = type === 0
       ? { ordering: 'none', ifNoMatch: 'returnNotFound' }
       : { ordering: type === -1 ? 'desc' : 'asc', ifNoMatch: type === -1 ? 'returnUpperBound' : 'returnLowerBound' }
-    const index = searchStrategy.find(key, rangeValue, searchOptions)
+    const index = searchStrategy.find(
+      key,
+      rangeValue,
+      {
+        ...searchOptions,
+        onRangeValueAccess: rangeValue.range ? (address) => this.recordRangeDependencyAccess(state, rangeValue.range!, address) : undefined,
+      }
+    )
 
     if (index === -1) {
       return new CellError(ErrorType.NA, ErrorMessage.ValueNotFound)
     }
+    if (rangeValue.range !== undefined) {
+      const matchedAddress = rangeValue.width() === 1
+        ? simpleCellAddress(rangeValue.range.sheet, rangeValue.range.start.col, rangeValue.range.start.row + index)
+        : simpleCellAddress(rangeValue.range.sheet, rangeValue.range.start.col + index, rangeValue.range.start.row)
+      this.recordRangeDependencyAccess(state, rangeValue.range, matchedAddress)
+    }
     return index + 1
+  }
+
+  private recordRangeDependencyAccess(state: InterpreterState, range: AbsoluteCellRange, address: SimpleCellAddress): void {
+    state.activeEdgeCollector?.recordRangeCellEdge(state.formulaVertex, range.start, range.end, address)
   }
 }

@@ -40,7 +40,7 @@ import {
   LanguageNotRegisteredError,
   NotAFormulaError,
 } from './errors'
-import {Evaluator} from './Evaluator'
+import {CycleResolutionDebugSnapshot, Evaluator} from './Evaluator'
 import {ExportedChange, Exporter} from './Exporter'
 import {LicenseKeyValidityState} from './helpers/licenseKeyValidator'
 import {buildTranslationPackage, RawTranslationPackage, TranslationPackage} from './i18n'
@@ -215,6 +215,10 @@ export class HyperFormula implements TypedEmitter {
   /** @internal */
   public get evaluator(): Evaluator {
     return this._evaluator
+  }
+
+  public getCycleResolutionSnapshot(): CycleResolutionDebugSnapshot {
+    return this._evaluator.cycleResolutionSnapshot
   }
 
   /** @internal */
