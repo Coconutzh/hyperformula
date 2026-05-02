@@ -1,4 +1,4 @@
-import {HyperFormula} from '../src'
+import {ErrorType, HyperFormula} from '../src'
 import {adr} from './testUtils'
 
 describe('HyperFormula', () => {
@@ -139,6 +139,137 @@ describe('HyperFormula', () => {
     expect(hf.getCellValue(adr('A2'))).toBe(2)
     expect(hf.getCellValue(adr('B2'))).toBe(1)
     expect(hf.getCellValue(adr('B3'))).toBe(42)
+
+    hf.destroy()
+  })
+
+  it('should treat formula-produced empty strings as #VALUE! in arithmetic but keep true blanks as zero', () => {
+    const data = [
+      ['=""', '=1+A1', '=IFERROR(1+A1,"")'],
+      [null, '=1+A2', '=IFERROR(1+A2,"")'],
+      ['=""', '=10-A3', '=A3*2'],
+      ['=""', '=A4^2', '=IFERROR(A4^2,"")'],
+    ]
+
+    const hf = HyperFormula.buildFromArray(data, {licenseKey: 'gpl-v3'})
+
+    const b1 = hf.getCellValue(adr('B1')) as any
+    expect(b1.type).toBe(ErrorType.VALUE)
+    expect(hf.getCellValue(adr('C1'))).toBe('')
+
+    expect(hf.getCellValue(adr('B2'))).toBe(1)
+    expect(hf.getCellValue(adr('C2'))).toBe(1)
+
+    const b3 = hf.getCellValue(adr('B3')) as any
+    const c3 = hf.getCellValue(adr('C3')) as any
+    const b4 = hf.getCellValue(adr('B4')) as any
+    expect(b3.type).toBe(ErrorType.VALUE)
+    expect(c3.type).toBe(ErrorType.VALUE)
+    expect(b4.type).toBe(ErrorType.VALUE)
+    expect(hf.getCellValue(adr('C4'))).toBe('')
+
+    hf.destroy()
+  })
+
+  it('should propagate errors through AND/OR instead of short-circuiting them away', () => {
+    const data = [
+      ['=NA()'],
+      ['=AND(FALSE,A1)'],
+      ['=AND(TRUE,A1)'],
+      ['=OR(TRUE,A1)'],
+      ['=OR(FALSE,A1)'],
+      ['=IF(AND(FALSE,A1),1,0)'],
+      ['=IF(AND(TRUE,A1),1,0)'],
+      ['=IF(OR(TRUE,A1),1,0)'],
+      ['=IF(OR(FALSE,A1),1,0)'],
+    ]
+
+    const hf = HyperFormula.buildFromArray(data, {licenseKey: 'gpl-v3'})
+
+    for (const addr of ['A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9']) {
+      const value = hf.getCellValue(adr(addr)) as any
+      expect(value.type).toBe(ErrorType.NA)
+    }
+
+    hf.destroy()
+  })
+
+  it('should fold scalar-vs-range boolean comparisons inside OR/AND for workbook parity', () => {
+    const hf = HyperFormula.buildFromSheets({
+      Main: [
+        ['双端面机械密封', null, '=OR(Main!A1="",Main!A1=Ref!B1:B2)'],
+        [null, null, '=IF(OR(Main!A1="",Main!A1=Ref!B1:B2),0,1)'],
+        [null, null, '=AND(Main!A1<>"",Main!A1=Ref!B1:B2)'],
+      ],
+      Ref: [
+        [null, 1],
+        [null, '无'],
+      ],
+    }, {licenseKey: 'gpl-v3'})
+
+    expect(hf.getCellValue({sheet: 0, row: 0, col: 2})).toBe(false)
+    expect(hf.getCellValue({sheet: 0, row: 1, col: 2})).toBe(1)
+    expect(hf.getCellValue({sheet: 0, row: 2, col: 2})).toBe(false)
+
+    hf.destroy()
+  })
+
+  it('should allow MIN/MAX over IF-produced range filters for workbook parity', () => {
+    const hf = HyperFormula.buildFromArray([
+      [0, -1, 2, 3, null, '=MIN(IF(A1:D1>0,A1:D1))', '=MAX(IF(A1:D1>0,A1:D1))'],
+      [null, null, null, null, null, '=IF(TRUE,MIN(IF(A1:D1>0,A1:D1)),1)', '=IF(TRUE,MAX(IF(A1:D1>0,A1:D1)),1)'],
+    ], {licenseKey: 'gpl-v3'})
+
+    expect(hf.getCellValue(adr('F1'))).toBe(2)
+    expect(hf.getCellValue(adr('G1'))).toBe(3)
+    expect(hf.getCellValue(adr('F2'))).toBe(2)
+    expect(hf.getCellValue(adr('G2'))).toBe(3)
+
+    hf.destroy()
+  })
+
+  it('should match Excel error semantics for zero raised to non-positive powers', () => {
+    const hf = HyperFormula.buildFromArray([
+      ['=0^0', '=0^(-2)', '=0^(-1/3)', '=POWER(0,-2)', '=POWER(0,0)'],
+    ], {licenseKey: 'gpl-v3'})
+
+    const a1 = hf.getCellValue(adr('A1')) as any
+    const b1 = hf.getCellValue(adr('B1')) as any
+    const c1 = hf.getCellValue(adr('C1')) as any
+    const d1 = hf.getCellValue(adr('D1')) as any
+    const e1 = hf.getCellValue(adr('E1')) as any
+
+    expect(a1.type).toBe(ErrorType.NUM)
+    expect(b1.type).toBe(ErrorType.DIV_BY_ZERO)
+    expect(c1.type).toBe(ErrorType.DIV_BY_ZERO)
+    expect(d1.type).toBe(ErrorType.DIV_BY_ZERO)
+    expect(e1.type).toBe(ErrorType.NUM)
+
+    hf.destroy()
+  })
+
+  it('should preserve Excel TEXT semantics for formula empty strings and non-numeric scalars', () => {
+    const hf = HyperFormula.buildFromArray([
+      ['=TEXT("","0.000")'],
+      ['=""', '=TEXT(A2,"0.000")'],
+      [null, '=TEXT(A3,"0.000")'],
+      [null, '=TEXT(A4,"0.000")'],
+      ['=TEXT("123","0.000")'],
+      ['=TEXT(TRUE,"0.000")'],
+      ['=TEXT(FALSE,"0.000")'],
+      ['=TEXT("2026-01-31","yyyy-mm-dd")'],
+      ['=TEXT("abc","0.000")'],
+    ], {licenseKey: 'gpl-v3'})
+
+    expect(hf.getCellValue(adr('A1'))).toBe('')
+    expect(hf.getCellValue(adr('B2'))).toBe('')
+    expect(hf.getCellValue(adr('B3'))).toBe('0.000')
+    expect(hf.getCellValue(adr('B4'))).toBe('0.000')
+    expect(hf.getCellValue(adr('A5'))).toBe('123.000')
+    expect(hf.getCellValue(adr('A6'))).toBe('TRUE')
+    expect(hf.getCellValue(adr('A7'))).toBe('FALSE')
+    expect(hf.getCellValue(adr('A8'))).toBe('2026-01-31')
+    expect(hf.getCellValue(adr('A9'))).toBe('abc')
 
     hf.destroy()
   })

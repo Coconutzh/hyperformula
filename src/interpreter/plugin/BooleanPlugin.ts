@@ -47,6 +47,7 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
       ],
       repeatLastArgs: 1,
       expandRanges: true,
+      enableArrayArithmeticForArguments: true,
     },
     'OR': {
       method: 'or',
@@ -55,6 +56,7 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
       ],
       repeatLastArgs: 1,
       expandRanges: true,
+      enableArrayArithmeticForArguments: true,
     },
     'XOR': {
       method: 'xor',
@@ -63,6 +65,7 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
       ],
       repeatLastArgs: 1,
       expandRanges: true,
+      enableArrayArithmeticForArguments: true,
     },
     'NOT': {
       method: 'not',
@@ -214,20 +217,29 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
     }
 
     const booleanMeta: FunctionArgument = {argumentType: FunctionArgumentType.BOOLEAN}
+    let firstError: CellError | undefined
+    let sawFalse = false
     for (const arg of ast.args) {
       const scalarValues = this.listOfScalarValues([arg], state)
       for (const [scalarValue] of scalarValues) {
         const coerced = this.coerceToType(scalarValue, booleanMeta, state)
         if (coerced instanceof CellError) {
-          return coerced
+          firstError ??= coerced
+          continue
         }
         if (coerced !== undefined && !coerced) {
-          return false
+          // Excel evaluates all AND arguments and propagates errors
+          // even if an earlier argument is already FALSE.
+          sawFalse = true
         }
       }
     }
 
-    return true
+    if (firstError !== undefined) {
+      return firstError
+    }
+
+    return !sawFalse
   }
 
   /**
@@ -246,20 +258,29 @@ export class BooleanPlugin extends FunctionPlugin implements FunctionPluginTypec
     }
 
     const booleanMeta: FunctionArgument = {argumentType: FunctionArgumentType.BOOLEAN}
+    let firstError: CellError | undefined
+    let sawTrue = false
     for (const arg of ast.args) {
       const scalarValues = this.listOfScalarValues([arg], state)
       for (const [scalarValue] of scalarValues) {
         const coerced = this.coerceToType(scalarValue, booleanMeta, state)
         if (coerced instanceof CellError) {
-          return coerced
+          firstError ??= coerced
+          continue
         }
         if (coerced !== undefined && coerced) {
-          return true
+          // Excel evaluates all OR arguments and propagates errors
+          // even if an earlier argument is already TRUE.
+          sawTrue = true
         }
       }
     }
 
-    return false
+    if (firstError !== undefined) {
+      return firstError
+    }
+
+    return sawTrue
   }
 
   public not(ast: ProcedureAst, state: InterpreterState): InterpreterValue {

@@ -97,6 +97,7 @@ export class NumericAggregationPlugin extends FunctionPlugin implements Function
         {argumentType: FunctionArgumentType.ANY}
       ],
       repeatLastArgs: 1,
+      enableArrayArithmeticForArguments: true,
     },
     'MIN': {
       method: 'min',
@@ -104,6 +105,7 @@ export class NumericAggregationPlugin extends FunctionPlugin implements Function
         {argumentType: FunctionArgumentType.ANY}
       ],
       repeatLastArgs: 1,
+      enableArrayArithmeticForArguments: true,
     },
     'MAXA': {
       method: 'maxa',

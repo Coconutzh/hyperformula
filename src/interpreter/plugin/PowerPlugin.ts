@@ -20,6 +20,6 @@ export class PowerPlugin extends FunctionPlugin implements FunctionPluginTypeche
   }
 
   public power(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
-    return this.runFunction(ast.args, state, this.metadata('POWER'), Math.pow)
+    return this.runFunction(ast.args, state, this.metadata('POWER'), this.arithmeticHelper.pow)
   }
 }

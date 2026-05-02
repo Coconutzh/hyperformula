@@ -346,44 +346,44 @@ export class Interpreter {
 
   private plusOp = (arg1: InternalScalarValue, arg2: InternalScalarValue): InternalScalarValue =>
     binaryErrorWrapper(this.arithmeticHelper.addWithEpsilon,
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg1),
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg2)
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg1),
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg2)
     )
 
   private minusOp = (arg1: InternalScalarValue, arg2: InternalScalarValue): InternalScalarValue =>
     binaryErrorWrapper(this.arithmeticHelper.subtract,
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg1),
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg2)
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg1),
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg2)
     )
 
   private timesOp = (arg1: InternalScalarValue, arg2: InternalScalarValue): InternalScalarValue =>
     binaryErrorWrapper(
       this.arithmeticHelper.multiply,
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg1),
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg2)
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg1),
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg2)
     )
 
   private powerOp = (arg1: InternalScalarValue, arg2: InternalScalarValue): InternalScalarValue =>
     binaryErrorWrapper(
       this.arithmeticHelper.pow,
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg1),
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg2)
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg1),
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg2)
     )
 
   private divOp = (arg1: InternalScalarValue, arg2: InternalScalarValue): InternalScalarValue =>
     binaryErrorWrapper(
       this.arithmeticHelper.divide,
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg1),
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg2)
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg1),
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg2)
     )
 
   private unaryMinusOp = (arg: InternalScalarValue): InternalScalarValue =>
     unaryErrorWrapper(this.arithmeticHelper.unaryMinus,
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg))
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg))
 
   private percentOp = (arg: InternalScalarValue): InternalScalarValue =>
     unaryErrorWrapper(this.arithmeticHelper.unaryPercent,
-      this.arithmeticHelper.coerceScalarToNumberOrError(arg))
+      this.arithmeticHelper.coerceScalarToNumberOrErrorForArithmetic(arg))
 
   private unaryPlusOp = (arg: InternalScalarValue): InternalScalarValue => this.arithmeticHelper.unaryPlus(arg)
 

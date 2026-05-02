@@ -123,8 +123,20 @@ export class ArithmeticHelper {
     }
   }
 
-  public pow = (left: ExtendedNumber, right: ExtendedNumber) => {
-    return Math.pow(getRawValue(left), getRawValue(right))
+  public pow = (left: ExtendedNumber, right: ExtendedNumber): ExtendedNumber | CellError => {
+    const leftRaw = getRawValue(left)
+    const rightRaw = getRawValue(right)
+
+    if (leftRaw === 0) {
+      if (rightRaw === 0) {
+        return new CellError(ErrorType.NUM, ErrorMessage.NaN)
+      }
+      if (rightRaw < 0) {
+        return new CellError(ErrorType.DIV_BY_ZERO)
+      }
+    }
+
+    return this.ExtendedNumberFactory(Math.pow(leftRaw, rightRaw), inferExtendedNumberTypeMultiplicative(left, right))
   }
 
   public addWithEpsilonRaw = (left: number, right: number): number => {
@@ -216,8 +228,21 @@ export class ArithmeticHelper {
     return this.coerceToMaybeNumber(arg) ?? new CellError(ErrorType.VALUE, ErrorMessage.NumberCoercion)
   }
 
+  public coerceScalarToNumberOrErrorForArithmetic(arg: InternalScalarValue): ExtendedNumber | CellError {
+    if (arg instanceof CellError) {
+      return arg
+    }
+    return this.coerceToMaybeNumberForArithmetic(arg) ?? new CellError(ErrorType.VALUE, ErrorMessage.NumberCoercion)
+  }
+
   public coerceToMaybeNumber(arg: InternalScalarValue): Maybe<ExtendedNumber> {
     return this.coerceNonDateScalarToMaybeNumber(arg) ?? (
+      typeof arg === 'string' ? this.dateTimeHelper.dateStringToDateNumber(arg) : undefined
+    )
+  }
+
+  public coerceToMaybeNumberForArithmetic(arg: InternalScalarValue): Maybe<ExtendedNumber> {
+    return this.coerceNonDateScalarToMaybeNumberForArithmetic(arg) ?? (
       typeof arg === 'string' ? this.dateTimeHelper.dateStringToDateNumber(arg) : undefined
     )
   }
@@ -228,6 +253,34 @@ export class ArithmeticHelper {
     } else if (typeof arg === 'string') {
       if (arg === '') {
         return 0
+      }
+
+      const maybePercentNumber = this.coerceStringToMaybePercentNumber(arg)
+      if (maybePercentNumber !== undefined) {
+        return maybePercentNumber
+      }
+
+      const maybeCurrencyNumber = this.coerceStringToMaybeCurrencyNumber(arg)
+      if (maybeCurrencyNumber !== undefined) {
+        return maybeCurrencyNumber
+      }
+
+      return this.numberLiteralsHelper.numericStringToMaybeNumber(arg.trim())
+    } else if (isExtendedNumber(arg)) {
+      return arg
+    } else if (typeof arg === 'boolean') {
+      return Number(arg)
+    } else {
+      return undefined
+    }
+  }
+
+  public coerceNonDateScalarToMaybeNumberForArithmetic(arg: InternalScalarValue): Maybe<ExtendedNumber> {
+    if (arg === EmptyValue) {
+      return 0
+    } else if (typeof arg === 'string') {
+      if (arg === '') {
+        return undefined
       }
 
       const maybePercentNumber = this.coerceStringToMaybePercentNumber(arg)

@@ -89,7 +89,7 @@ export class DateTimePlugin extends FunctionPlugin implements FunctionPluginType
     'TEXT': {
       method: 'text',
       parameters: [
-        {argumentType: FunctionArgumentType.NUMBER},
+        {argumentType: FunctionArgumentType.SCALAR},
         {argumentType: FunctionArgumentType.STRING},
       ]
     },
@@ -360,7 +360,35 @@ export class DateTimePlugin extends FunctionPlugin implements FunctionPluginType
    */
   public text(ast: ProcedureAst, state: InterpreterState): InterpreterValue {
     return this.runFunction(ast.args, state, this.metadata('TEXT'),
-      (numberRepresentation, formatArg) => format(numberRepresentation, formatArg, this.config, this.dateTimeHelper)
+      (valueRepresentation: RawScalarValue, formatArg: string) => {
+        if (valueRepresentation instanceof CellError) {
+          return valueRepresentation
+        }
+
+        if (valueRepresentation === EmptyValue) {
+          return format(0, formatArg, this.config, this.dateTimeHelper)
+        }
+
+        if (typeof valueRepresentation === 'string') {
+          if (valueRepresentation === '') {
+            return ''
+          }
+
+          const maybeNumber =
+            this.arithmeticHelper.coerceNonDateScalarToMaybeNumber(valueRepresentation)
+            ?? this.dateTimeHelper.dateStringToDateNumber(valueRepresentation)
+
+          return maybeNumber !== undefined
+            ? format(getRawValue(maybeNumber), formatArg, this.config, this.dateTimeHelper)
+            : valueRepresentation
+        }
+
+        if (typeof valueRepresentation === 'boolean') {
+          return valueRepresentation ? 'TRUE' : 'FALSE'
+        }
+
+        return format(valueRepresentation, formatArg, this.config, this.dateTimeHelper)
+      }
     )
   }
 
